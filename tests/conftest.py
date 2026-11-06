@@ -115,3 +115,28 @@ def harvested(tmp_path_factory, scripted_llm, preprocessed, harvested_hero, harv
 @pytest.fixture(scope="session")
 def harvested_hero_store(harvested_hero):
     return harvested_hero.store
+
+
+@pytest.fixture(scope="session")
+def derive_module():
+    import importlib.util
+
+    from e2ekg.graph.shacl import CQ_DIR
+    spec = importlib.util.spec_from_file_location("_derive_expected", CQ_DIR / "_derive_expected.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="session")
+def fixture_expected(harvested_hero, derive_module, tmp_path_factory):
+    """The CQs re-derived from the 0.05 fixture's own generation (R25), as
+    `<stem>.rq` + `<stem>.expected.json` pairs in tmp."""
+    import json
+
+    from e2ekg.graph.shacl import CQ_DIR
+    d = tmp_path_factory.mktemp("cq_fixture")
+    for stem, payload in derive_module.derive(answers=harvested_hero.answers).items():
+        (d / f"{stem}.rq").write_text((CQ_DIR / f"{stem}.rq").read_text())
+        (d / f"{stem}.expected.json").write_text(json.dumps(payload, indent=2) + "\n")
+    return d

@@ -9,7 +9,6 @@ the authored hero chat beats (claims typed by their phase), and the
 chat.retraction injections from the generation manifest (absent when
 data/raw/_answers is missing; CQ06 then skips). Distractors outside the
 window check the CQs' filters."""
-import importlib.util
 from datetime import timedelta
 from decimal import Decimal
 
@@ -18,7 +17,6 @@ from rdflib import Graph, Literal, URIRef
 from rdflib import namespace as rdfns  # not `import XSD`: pytest probes conftest attrs
 from rdflib.namespace import PROV, RDF, RDFS
 
-from e2ekg.graph.shacl import CQ_DIR
 from e2ekg.graph.uris import (
     NS, app_uri, change_uri, concept, person_uri, region_uri, scoped_uri, team_uri, uri,
 )
@@ -33,13 +31,6 @@ _LOG_CAT = {"pool_exhaustion": "pool_exhaustion", "timeouts": "timeout",
 # Authored beat phase -> claim kind (verdicts and chatter carry no claim here).
 _CLAIM_KIND = {"observation": "observation", "hypothesis": "hypothesis", "mitigation": "mitigation",
                "question": None, "verdict": None, "chatter": None}
-
-
-def load_derive():
-    spec = importlib.util.spec_from_file_location("_derive_expected", CQ_DIR / "_derive_expected.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def _ts(dt) -> Literal:
@@ -69,9 +60,8 @@ class _B:
                 self.g.add((s, p, x))
 
 
-def build_hero_reference(d=None) -> tuple[Graph, bool]:
+def build_hero_reference(d) -> tuple[Graph, bool]:
     """(graph, has_retractions)."""
-    d = d or load_derive()
     s = d.S
     b = _B()
     g = b.g
@@ -252,11 +242,6 @@ def build_hero_reference(d=None) -> tuple[Graph, bool]:
            ("incident", "homepage-graphql", live_i.opened)], Decimal("0.61"),
           change("chg-dep-0001"))
     return g, has_retractions
-
-
-@pytest.fixture(scope="session")
-def derive_module():
-    return load_derive()
 
 
 @pytest.fixture(scope="session")

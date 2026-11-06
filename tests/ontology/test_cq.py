@@ -36,17 +36,6 @@ def _gate(cq: Path) -> None:
         pytest.skip(f"{cq.stem} requires {sorted(later)} (Task 13 correlation)")
 
 
-@pytest.fixture(scope="session")
-def fixture_expected(harvested_hero, derive_module, tmp_path_factory) -> Path:
-    """The CQs re-derived from the 0.05 fixture's own generation (R25), as
-    `<stem>.rq` + `<stem>.expected.json` pairs in tmp."""
-    d = tmp_path_factory.mktemp("cq_fixture")
-    for stem, payload in derive_module.derive(answers=harvested_hero.answers).items():
-        (d / f"{stem}.rq").write_text((CQ_DIR / f"{stem}.rq").read_text())
-        (d / f"{stem}.expected.json").write_text(json.dumps(payload, indent=2) + "\n")
-    return d
-
-
 @pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
 def test_cq(cq, harvested_hero_store, fixture_expected):
     _gate(cq)
