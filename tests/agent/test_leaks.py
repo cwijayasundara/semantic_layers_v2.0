@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import polars as pl
 import pytest
-from conftest import call
+from agent_helpers import call
 
 from e2ekg.agent.tools import _observable
 from e2ekg.graph.uris import change_uri

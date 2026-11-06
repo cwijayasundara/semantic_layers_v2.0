@@ -5,14 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_helpers import copy_store
+
 from e2ekg.agent.tools import make_tools
-from e2ekg.graph.store import Store
-
-
-def copy_store(src: Store) -> Store:
-    dst = Store(None)
-    dst.oxigraph.extend(src.oxigraph)
-    return dst
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +32,3 @@ def full(harvested_hero, harvested_hero_as_of, preprocessed_hero, scripted_llm):
     return make_tools(harvested_hero.store, preprocessed_hero.proc, "hero", "leaky",
                       llm=scripted_llm, as_of=harvested_hero_as_of.as_of)
 
-
-def call(tools, name: str, **args):
-    return json.loads(tools[name].invoke(args))

@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from conftest import call
+from agent_helpers import call
 
 from e2ekg.agent.tools import CAP
 from e2ekg.graph.uris import change_uri
@@ -113,7 +113,7 @@ def test_dependency_closure_counts_hops_from_the_app(tools):
 
 
 def test_the_control_has_an_alert_to_explain_and_no_chain(harvested, preprocessed, scripted_llm):
-    from conftest import copy_store
+    from agent_helpers import copy_store
 
     from e2ekg.agent.tools import make_tools
     h, pp = harvested("v-control", as_of=True), preprocessed("v-control")
