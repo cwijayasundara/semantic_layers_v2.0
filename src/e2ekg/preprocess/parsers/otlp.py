@@ -91,8 +91,10 @@ class OtlpParser:
         # Every envelope key is prefixed so a span key of the same name cannot
         # overwrite it.
         _, top = split_known(d, frozenset({"resource", "scopeSpans"}))
-        envelope = {f"resourceSpans.{k}": v for k, v in top.items()} | side
+        envelope = {f"resourceSpans.{k}": v for k, v in top.items()}
         envelope |= {f"resource.{k}": v for k, v in d["resource"].items() if k != "attributes"}
+        for k, v in side.items():  # synthetic keys go last, so a real key is never overwritten
+            envelope[_free(envelope, k)] = v
         service, host = resource.get("service.name"), resource.get("host.name")
         rows = []
         for ss in scopes:

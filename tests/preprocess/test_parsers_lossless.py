@@ -125,3 +125,10 @@ def test_otlp_synthetic_attribute_key_does_not_overwrite_a_real_key():
                "scopeSpans": [{"spans": [_span(**{"attributes[0]": "real"}, attributes=[7])]}]})
     res = r["rows"][0]["_residual"]
     assert sorted(map(str, res.values())) == ["7", "real"]
+
+
+def test_otlp_resource_level_synthetic_key_does_not_overwrite_a_real_key():
+    r = _otlp({"resource": {"attributes": [5], "attributes[0]": "real"},
+               "scopeSpans": [{"spans": [_span()]}]})
+    for res in (r["_residual"], r["rows"][0]["_residual"]):
+        assert sorted(map(str, res.values())) == ["5", "real"]
