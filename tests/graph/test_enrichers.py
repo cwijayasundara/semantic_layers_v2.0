@@ -307,6 +307,23 @@ def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
     return len(sels), bad
 
 
+def test_a_slow_trace_over_a_zero_ms_baseline_has_no_magnitude():
+    from datetime import UTC, datetime, timedelta
+
+    from e2ekg.graph.enrichers.traces import TraceFingerprintEnricher
+    a, b = "https://kg.local/app/application/a", "https://kg.local/app/application/b"
+    t0 = datetime(2026, 10, 11, 22, 0, tzinfo=UTC)
+    fp = pl.DataFrame([{"key": f"{a}>{b}", "caller_uri": a, "callee_uri": b,
+                        "minute": t0 + timedelta(minutes=i), "n": 30,
+                        "p50_ms": 0.0 if i < 60 else 50.0, "p99_ms": 0.0 if i < 60 else 80.0,
+                        "error_rate": 0.0} for i in range(62)])
+    e = TraceFingerprintEnricher()
+    e.scenario = "t"
+    triples = list(e.emit(e.analyze(fp)))
+    fps = {s for s, _, o in triples if o == OPS.TraceEdgeFingerprint}
+    assert fps and not [s for s, p, _ in triples if s in fps and p == OPS.magnitude]
+
+
 @pytest.mark.parametrize("store", ["harvested_hero", "harvested_hero_as_of"])
 def test_fingerprint_counts_equal_their_selectors(request, preprocessed_hero, store):
     n, bad = fingerprint_count_mismatches(request.getfixturevalue(store).store,
