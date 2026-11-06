@@ -17,11 +17,12 @@ def external(live):
     return {v: k for k, v in live.answers["external_ids"].items()}
 
 
-def test_the_toolset_is_the_briefed_fourteen(tools):
+def test_the_toolset_is_the_briefed_fourteen_and_the_refutation_check(tools):
     assert set(tools) == {
         "find_symptom", "dependency_closure", "changes_in_window", "anomalies_in_window",
         "log_spikes", "trace_edges", "alerts_incidents", "similar_incidents", "chat_claims",
-        "causal_chains", "raw_evidence", "sparql_select", "record_finding", "read_findings"}
+        "causal_chains", "refutation_check", "raw_evidence", "sparql_select", "record_finding",
+        "read_findings"}
 
 
 def test_changes_in_window_finds_root_and_herrings(tools, external):

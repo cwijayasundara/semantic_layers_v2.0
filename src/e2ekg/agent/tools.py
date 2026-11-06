@@ -41,8 +41,9 @@ from langchain_core.tools import BaseTool, tool
 from rdflib import Graph, Literal as RdfLiteral, URIRef
 from rdflib.namespace import RDF, RDFS
 
+from e2ekg.agent.refute import Investigation
 from e2ekg.agent.report import FindingIn
-from e2ekg.correlate.engine import correlate
+from e2ekg.correlate.engine import CHANGE_TYPES, correlate
 from e2ekg.graph.enricher import dec, node
 from e2ekg.graph.enrichers.correlation import chain_inputs
 from e2ekg.graph.harvest import symptom_uri
@@ -455,6 +456,43 @@ def causal_chains(env: Env, symptom: str) -> str:
     return env.chains[symptom]
 
 
+@_guarded
+def refutation_check(env: Env, alert_id: str, candidate_uris: list[str]) -> str:
+    found = find_symptom(env, alert_id)
+    if found.startswith("error: "):
+        raise ToolError(found.removeprefix("error: "))
+    sym = json.loads(found)
+    signals, edges, _ = chain_inputs(env.store, sym["symptom_uri"])
+    kinds = {_app_of(r["a"]): r["k"]
+             for r in env.store.query(PFX + "SELECT ?a ?k WHERE { ?a ops:appKind ?k }")}
+    filed = (sym["incident"] or {}).get("affects", [])
+    inv = Investigation(signals, edges, kinds, sym["alert"]["uri"], filed,
+                        correlate(signals, edges, sym["symptom_uri"]))
+    changes = {s.uri for s in signals if s.type in CHANGE_TYPES}
+    asked = [u.strip() for u in candidate_uris]
+    verdicts = inv.judge(inv.candidates(u for u in asked if u in changes))
+    change_kind = {r["c"]: _tail(r["k"]) for r in _select(env, f"""SELECT ?c ?k WHERE {{
+        VALUES ?c {{ {' '.join(f'<{v.change.uri}>' for v in verdicts)} }}
+        ?c ops:changeKind ?k }}""")} if verdicts else {}
+    rows = []
+    for v in verdicts:
+        c = v.change
+        row = {"uri": c.uri, "kind": change_kind.get(c.uri, c.type), "app": c.app,
+               "at": _z(c.at_utc), "survives": v.survives,
+               "refuted_by": [f"{k.name}: {k.why}" for k in v.checks if not k.ok]}
+        if v.survives:
+            row["supported_by"] = [f"{k.name}: {k.why}" for k in v.checks]
+        rows.append({**row, "chain_conf": v.chain_conf})
+    rows += [{"uri": u, "error": "not a change in the graph before the cutoff"}
+             for u in asked if u not in changes]
+    head = {"symptom": {
+        "alert": inv.alert.uri, "app": inv.alert.app, "alert_at": _z(inv.alert.at_utc),
+        "onset": _z(inv.onset.at_utc), "onset_uri": inv.onset.uri, "clients": list(inv.clients),
+        "filed_against": list(inv.filed_against),
+        "filed_in_closure": all(inv.depends(inv.alert.app, a) for a in filed) if filed else None}}
+    return _fit(rows, head=head, key="candidates")
+
+
 # --- sparql ------------------------------------------------------------------------------
 
 _COMMENT = re.compile(r"""(<[^<>"\s]*>|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|#[^\n]*""")
@@ -830,6 +868,27 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         """
         return causal_chains(env, symptom_uri)
 
+    @tool("refutation_check", parse_docstring=True)
+    def refutation_check_tool(alert_id: str, candidate_uris: list[str]) -> str:
+        """Test candidate root-cause changes against the graph. The symptom is the alert's
+        application degrading, from the first telemetry of its episode (onset) to the alert.
+        Candidates are every change (autoscaling aside) in the hour before the onset on an app
+        the alert app depends on, a client that reaches it, or an app the incident was filed
+        against, plus the changes you name. Each must pass: closure (the alert app depends on its app),
+        timing (it landed before the onset, skew-corrected time), clients (every client of
+        the alert app depends on its app), dependencies (nothing its app depends on was
+        already degrading when it landed), origin (not autoscaling, not a commit a later
+        deployment shipped), effect (its app shows a change within 20 min). Returns
+        {symptom{alert,app,alert_at,onset,onset_uri,clients,filed_against,filed_in_closure},
+        candidates[{uri,kind,app,at,survives,refuted_by,supported_by,chain_conf}]},
+        survivors first.
+
+        Args:
+            alert_id: The alert (radar-...) or incident (INC-...) under investigation.
+            candidate_uris: Change URIs to test besides the ones found automatically.
+        """
+        return refutation_check(env, alert_id, candidate_uris)
+
     @tool("raw_evidence", parse_docstring=True)
     def raw_evidence_tool(uri_or_selector: str, limit: int = 20) -> str:
         """The original raw lines behind a node or a selector, earliest first, each with its
@@ -881,7 +940,8 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
              "anomalies_in_window": anomalies_in_window_tool, "log_spikes": log_spikes_tool,
              "trace_edges": trace_edges_tool, "alerts_incidents": alerts_incidents_tool,
              "similar_incidents": similar_incidents_tool, "chat_claims": chat_claims_tool,
-             "causal_chains": causal_chains_tool, "raw_evidence": raw_evidence_tool,
+             "causal_chains": causal_chains_tool, "refutation_check": refutation_check_tool,
+             "raw_evidence": raw_evidence_tool,
              "sparql_select": sparql_select_tool, "record_finding": record_finding_tool,
              "read_findings": read_findings_tool}
     return named
