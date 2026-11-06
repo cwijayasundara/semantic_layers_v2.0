@@ -47,7 +47,7 @@ def test_ontology_parses_and_is_consistent():
 
 def test_classes_are_exactly_section5_plus_documented_extras():
     g = Graph().parse(ONTOLOGY_DIR / "core.ttl")
-    classes = set(g.subjects(RDF.type, OWL.Class))
+    classes = {c for c in g.subjects(RDF.type, OWL.Class) if isinstance(c, URIRef)}
     assert classes == {OPS[c] for c in SECTION5} | EXTRA
 
 
@@ -61,7 +61,7 @@ def test_no_service_class_anywhere():
 
 def test_every_class_and_property_has_label_and_comment():
     g = Graph().parse(ONTOLOGY_DIR / "core.ttl")
-    terms = set(g.subjects(RDF.type, OWL.Class))
+    terms = {c for c in g.subjects(RDF.type, OWL.Class) if isinstance(c, URIRef)}
     for kind in (OWL.ObjectProperty, OWL.DatatypeProperty):
         terms |= set(g.subjects(RDF.type, kind))
     for t in terms:
@@ -311,3 +311,21 @@ def test_signal_type_one_per_instance_several_per_class():
     assert ok, report
     assert not validate(graph_from(body + f" , <{failed}> ."))[0]
     assert not validate(graph_from(body.replace(str(slow), str(concept("severity", "SEV2"))) + " ."))[0]
+
+
+@pytest.mark.parametrize("target,good", [
+    ("ops:Incident", True), ("ops:Alert", True), ("ops:Message", False)])
+def test_a_causal_chain_explains_an_incident_or_an_alert(target, good):
+    g = graph_from(f"""
+        ex:x a {target} ; ops:rawSelector "r" .
+        ex:c a ops:CausalChain ; ops:explains ex:x ;
+             <http://www.w3.org/ns/prov#wasDerivedFrom> ex:x .""")
+    ok, report = validate(g)
+    assert ok is good, report
+
+
+def test_explains_ranges_over_incidents_and_alerts():
+    from rdflib.collection import Collection
+    g = load_ontology()
+    union = g.value(g.value(OPS.explains, RDFS.range), OWL.unionOf)
+    assert set(Collection(g, union)) == {OPS.Incident, OPS.Alert}

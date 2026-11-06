@@ -170,6 +170,12 @@ shp:DependsOnIn a sh:NodeShape ;
     sh:property [ sh:path [ sh:inversePath ops:dependsOn ] ; sh:maxCount 50 ;
                   sh:message "More than 50 incoming ops:dependsOn edges" ] .
 
+# A causal chain or hypothesis explains a symptom: an incident, or an alert.
+shp:Explains a sh:NodeShape ;
+    sh:targetObjectsOf ops:explains ;
+    sh:or ( [ sh:class ops:Incident ] [ sh:class ops:Alert ] ) ;
+    sh:message "ops:explains points at a node that is neither an ops:Incident nor an ops:Alert" .
+
 # 6. Findings: on an application, citing evidence, with confidence in [0, 1].
 shp:Finding a sh:NodeShape ;
     sh:targetClass ops:Finding ;

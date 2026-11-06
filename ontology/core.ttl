@@ -280,8 +280,10 @@ ops:ofPattern a owl:ObjectProperty ; rdfs:domain ops:LogSpike ; rdfs:range ops:L
     rdfs:label "of pattern" ; rdfs:comment "The log pattern that spiked." .
 ops:hasLink a owl:ObjectProperty ; rdfs:domain ops:CausalChain ; rdfs:range ops:CausalLink ;
     rdfs:label "has link" ; rdfs:comment "A link of a causal chain." .
-ops:explains a owl:ObjectProperty ; rdfs:range ops:Incident ;
-    rdfs:label "explains" ; rdfs:comment "The incident a causal chain or hypothesis explains." .
+ops:explains a owl:ObjectProperty ;
+    rdfs:range [ a owl:Class ; owl:unionOf ( ops:Incident ops:Alert ) ] ;
+    rdfs:label "explains" ;
+    rdfs:comment "The symptom a causal chain or hypothesis explains: the live incident, or in a window with none, its most severe alert." .
 ops:cites a owl:ObjectProperty ;
     rdfs:label "cites" ; rdfs:comment "Evidence node supporting a finding, link or hypothesis." .
 ops:resolvedBy a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Person ;
