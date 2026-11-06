@@ -233,6 +233,60 @@ def _add_harvest(sub) -> None:
     p.set_defaults(func=_cmd_harvest)
 
 
+def _open_store(path: str):
+    from e2ekg.graph.store import Store
+    if not Path(path).is_dir():
+        raise SystemExit(f"no harvested store at {path}; run `e2ekg harvest` first")
+    return Store(Path(path))
+
+
+def _verdict(path: Path, store, cq_dir: str | None) -> bool:
+    from e2ekg.ontology_evolve.propose import check_proposal
+    ok, report = check_proposal(path, store, Path(cq_dir) if cq_dir else None)
+    print(f"{'ACCEPT' if ok else 'REJECT'} {path}\n{report}", flush=True)
+    return ok
+
+
+def _cmd_ontology_propose(args: argparse.Namespace) -> int:
+    from e2ekg.ontology_evolve.propose import mine_candidates, propose
+    store = _open_store(args.store)
+    llm = make_llm(args.llm)
+    found = mine_candidates(Path(args.proc), store)
+    print(f"candidates: {len(found.error_templates)} error templates, {len(found.tag_keys)} "
+          f"metric tag keys, {len(found.event_types)} event types", flush=True)
+    made = propose(found, llm, Path(args.out))
+    for p in made:
+        print(f"\n{p.path}: {p.rationale}", flush=True)
+        _verdict(p.path, store, args.cq_dir)
+    print(f"\n{len(made)} proposals in {args.out}. Approval is manual: move an accepted file "
+          "into ontology/extensions/.")
+    return 0
+
+
+def _cmd_ontology_check(args: argparse.Namespace) -> int:
+    return 0 if _verdict(Path(args.proposal), _open_store(args.store), args.cq_dir) else 1
+
+
+def _add_ontology(sub) -> None:
+    p = sub.add_parser("ontology", help="LLM-proposed, test-gated ontology extensions")
+    ps = p.add_subparsers(dest="ontology_command", required=True)
+    gate = argparse.ArgumentParser(add_help=False)
+    gate.add_argument("--store", default="data/graph/hero/store",
+                      help="harvested store the SHACL and CQ gate runs against")
+    gate.add_argument("--cq-dir", default=None,
+                      help="competency questions to hold (default ontology/cq)")
+    q = ps.add_parser("propose", parents=[gate],
+                      help="mine what the ontology does not cover and have the LLM propose "
+                           "extensions, each gated")
+    q.add_argument("--proc", default="data/processed/hero", help="processed scenario directory")
+    q.add_argument("--out", default="ontology/proposals")
+    q.add_argument("--llm", choices=("fireworks",), default="fireworks")
+    q.set_defaults(func=_cmd_ontology_propose)
+    c = ps.add_parser("check", parents=[gate], help="gate one proposal file; exit 1 if rejected")
+    c.add_argument("proposal")
+    c.set_defaults(func=_cmd_ontology_check)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="e2ekg")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -240,6 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_preprocess(sub)
     _add_ledger(sub)
     _add_harvest(sub)
+    _add_ontology(sub)
     return parser
 
 
