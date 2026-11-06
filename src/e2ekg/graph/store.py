@@ -83,6 +83,13 @@ class Store:
             self._store.add_graph(g)
         return len(quads)
 
+    def add_to_graph(self, name: URIRef, triples: Iterable[Triple]) -> int:
+        """Add `triples` to graph `name`, keeping what it holds. Returns the triples given."""
+        g = ox.NamedNode(str(name))
+        quads = {ox.Quad(to_ox(s), to_ox(p), to_ox(o), g) for s, p, o in triples}
+        self._store.extend(quads)
+        return len(quads)
+
     def clear_graph(self, name: URIRef) -> None:
         g = ox.NamedNode(str(name))
         if self._store.contains_named_graph(g):

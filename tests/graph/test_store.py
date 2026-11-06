@@ -29,6 +29,15 @@ def test_graph_uri_names_enricher_and_scenario():
     assert graph_uri("chat", "hero") == URIRef("https://kg.local/graph/chat/hero")
 
 
+def test_add_to_graph_keeps_what_the_graph_holds():
+    st = Store(None)
+    st.replace_graph(G1, _triples(2))
+    assert st.add_to_graph(G1, _triples(3)) == 15           # the 10 already held collapse
+    assert st.quad_count() == 15
+    assert st.add_to_graph(G2, _triples(1)) == 5
+    assert st.quad_count() == 20
+
+
 def test_replace_graph_counts_and_replaces(tmp_path):
     st = Store(tmp_path / "s")
     assert st.replace_graph(G1, _triples(3)) == 15

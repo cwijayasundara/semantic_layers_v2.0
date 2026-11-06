@@ -110,6 +110,19 @@ def selected_raw_ids(proc_root: Path, selectors: list[str]) -> set[str]:
     return out
 
 
+def earliest_raw_ids(proc_root: Path, selectors: list[str], limit: int,
+                     before: datetime) -> list[tuple[str, datetime]]:
+    """The `limit` earliest (raw id, time of its first row) that any of `selectors` (JSON)
+    selects among rows stamped strictly before `before`."""
+    cut = before.astimezone(UTC).isoformat()
+    tail = (f"WHERE r.ts_utc < TIMESTAMPTZ '{cut}' GROUP BY r.raw_id "
+            f"ORDER BY MIN(r.ts_utc), r.raw_id LIMIT {int(limit)}")
+    found: list[tuple[str, datetime]] = []
+    for t in _join(proc_root, selectors, "r.raw_id AS raw_id, MIN(r.ts_utc) AS ts", tail):
+        found += zip(t.column("raw_id").to_pylist(), t.column("ts").to_pylist(), strict=True)
+    return sorted(found, key=lambda x: (x[1], x[0]))[:limit]
+
+
 def selected_counts(proc_root: Path, selectors: list[str]) -> dict[str, int]:
     """Rows each selector (JSON) selects, zero included, in one join per source."""
     out = dict.fromkeys(selectors, 0)
