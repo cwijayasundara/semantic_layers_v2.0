@@ -183,7 +183,7 @@ def test_slack_only_nickname_resolved_through_closed_list(slack_fixture, resolve
 
 
 def test_batched_calls(slack_fixture, resolver):
-    from fixtures.scripted_llm import ScriptedClient
+    from e2ekg.scripted_llm import ScriptedClient
     s = ScriptedClient()
     extract_chat(slack_fixture, resolver, s)
     assert 1 <= s.batch_calls <= 2        # one channel, one chunk: not one call per message

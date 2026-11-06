@@ -188,7 +188,7 @@ def test_every_injected_surface_resolves_to_the_right_app(preprocessed_hero, cat
     """Oracle (tests only): for each id.* injection in the manifest the surface the
     generator wrote must resolve to the app it was written for, never to another app.
     Names the catalog does not carry resolve through the closed LLM list."""
-    from fixtures.scripted_llm import ScriptedClient
+    from e2ekg.scripted_llm import ScriptedClient
     r = Resolver(catalog, ScriptedClient())
     seen = wrong = unresolved = 0
     for inj in preprocessed_hero_injections(preprocessed_hero):
