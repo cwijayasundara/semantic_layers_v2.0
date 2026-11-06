@@ -83,8 +83,8 @@ class AlertsIncidentsEnricher(Enricher):
         for pid, d in sorted(first_by_id(pages, "page_id", "status", "triggered").items()):
             who = next((json_fields(r["fields"]).get("assignee") for r in d["rows"]
                         if json_fields(r["fields"]).get("assignee")), None)
-            key = next((k for r in d["rows"] if (k := json_fields(r["fields"]).get("incident_key"))),
-                       None)
+            keys = (json_fields(r["fields"]).get("incident_key") for r in d["rows"])
+            key = next((k for k in keys if k), None)
             out_pages.append({"id": pid, "app": _app_of(d["rows"]), "who": who, **d,
                               "alert": key if key in fired else None,
                               "who_ids": [r["raw_id"] for r in d["rows"]

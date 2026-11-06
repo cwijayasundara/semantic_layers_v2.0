@@ -58,7 +58,7 @@ class Symptom:
 class Cutoff:
     as_of: datetime
     symptom: Symptom
-    alert_id: str | None      # the symptom's alert; None: its page named no alert with a firing record
+    alert_id: str | None      # the symptom's alert; None: its page names none that fired
     alert_at: datetime
 
 
@@ -154,7 +154,8 @@ def _window(proc: Path) -> tuple[datetime, datetime]:
 
 def _first_firings(proc: Path) -> pl.DataFrame:
     """alert_id, severity, at: each alert's first firing record."""
-    return (scan(proc, "alerts").filter((pl.col("state") == "firing") & pl.col("ts_utc").is_not_null())
+    fired = (pl.col("state") == "firing") & pl.col("ts_utc").is_not_null()
+    return (scan(proc, "alerts").filter(fired)
             .sort("ts_utc", "raw_id").group_by("alert_id", maintain_order=True)
             .agg(pl.col("severity").first(), pl.col("ts_utc").first().alias("at")).collect())
 

@@ -187,6 +187,33 @@ def test_a_change_landing_after_the_cascade_began_is_explained_away():
     assert _linked([early, mid, effect], early, effect)
 
 
+def test_order_is_read_on_the_detectors_minute_grid():
+    dep = sig("dep", "deployment", "svc", 0.5)                 # 22:00:30
+    spike = sig("spike", "log_error", "svc", 0)                # its own minute, floored to 22:00
+    lat = sig("lat", "metric_anomaly", "svc", 0)               # same minute as the spike
+    asg = sig("asg", "autoscaling", "svc", 0.5)
+    signals = [dep, spike, lat, asg]
+    assert _linked(signals, dep, spike) and pair_score(dep, spike, 0.9) == pytest.approx(0.9)
+    assert not _linked(signals, lat, spike) and not _linked(signals, spike, lat)
+    assert _linked(signals, asg, lat) and not _linked(signals, lat, asg)
+    later = sig("later", "log_error", "svc", 1.2)
+    assert _linked(signals + [later], lat, later)
+    alert, inc = sig("alert", "alert", "svc", 1.5), sig("inc", "incident", "svc", 1.5,
+                                                         opened_by=("alert",))
+    assert not _linked([alert, inc], alert, inc)                # exact times: strictly earlier
+
+
+def test_a_cascade_explains_a_change_away_only_from_an_earlier_minute():
+    root = sig("root", "config_change", "svc", -3)
+    first = sig("first", "metric_anomaly", "svc", 0)
+    effect = sig("effect", "log_error", "edge", 4)
+    same = sig("same", "deployment", "svc", 0.5)               # lands in the cascade's first minute
+    late = sig("late", "deployment", "svc", 1)
+    signals = [root, first, effect, same, late]
+    assert _linked(signals, same, effect)
+    assert not _linked(signals, late, effect)
+
+
 def test_roles_people_make_changes_alerts_open_incidents_and_a_condition_does_not_cause_itself():
     m1, m2 = sig("m1", "metric_anomaly", "svc", 0), sig("m2", "metric_anomaly", "svc", 2)
     dep = sig("dep", "deployment", "svc", 3)

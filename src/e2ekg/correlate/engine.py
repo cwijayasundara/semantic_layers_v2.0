@@ -4,7 +4,12 @@ A Signal is one causal event: a change, an alert, an incident, or an onset of a
 telemetry type on one application (the enricher folds the detections behind it).
 
 The candidate-link graph has an edge a -> b ("a may have caused b") when
-  * 0 < b.at - a.at <= WINDOW;
+  * a precedes b on the detectors' minute grid (R41), within WINDOW: telemetry
+    onsets are floored to their minute, so a change, alert or incident (stamped to the
+    second) may precede an onset in its own minute, while a same-minute telemetry pair
+    or a telemetry onset and a change in one minute have no knowable order (the
+    change is taken first, so the graph stays acyclic). Exact-time pairs need a to be
+    strictly earlier. No admissibility rests on a sub-minute coincidence;
   * the roles allow it: people and pipelines make deployments, config changes,
     experiments and commits, so nothing causes them (they are roots only); an alert
     causes only an incident, and an incident is caused only by the alert its opening
@@ -82,10 +87,34 @@ class Chain:
     confidence: float
 
 
-def pair_score(a: Signal, b: Signal, prior: float) -> float:
+def _minute(t: datetime) -> datetime:
+    return t.replace(second=0, microsecond=0)
+
+
+def precedes(a: Signal, b: Signal) -> bool:
+    """a may have happened before b, on the minute grid, within the window."""
     dt = (b.at_utc - a.at_utc).total_seconds()
-    if not 0 < dt <= WINDOW_S:
+    if dt > WINDOW_S:
+        return False
+    if a.type in TELEMETRY and b.type in CHANGE_TYPES:
+        return _minute(a.at_utc) < _minute(b.at_utc)
+    if a.type in CHANGE_TYPES and b.type in TELEMETRY:
+        return _minute(a.at_utc) <= _minute(b.at_utc)
+    return dt > 0
+
+
+def _order(s: Signal) -> tuple:
+    """A topological order of every admissible link: minute, then changes before onsets
+    before alerts and incidents, then time."""
+    rank = 0 if s.type in CHANGE_TYPES else 1 if s.type in TELEMETRY else 2
+    return _minute(s.at_utc), rank, s.at_utc, s.uri
+
+
+def pair_score(a: Signal, b: Signal, prior: float) -> float:
+    """The brief's score; a change and an onset in one minute are dt = 0 apart."""
+    if not precedes(a, b):
         return 0.0
+    dt = max((b.at_utc - a.at_utc).total_seconds(), 0.0)
     return prior * (1 - 0.4 * dt / WINDOW_S) * (0.5 + 0.5 * b.severity)
 
 
@@ -131,12 +160,12 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
                     gate: bool = True, priors: Mapping[tuple[str, str], float] = PRIORS,
                     ) -> dict[Signal, list[tuple[Signal, float]]]:
     """b -> [(a, pair score)] over every admissible cause a of b."""
-    ordered = sorted(set(signals), key=lambda s: (s.at_utc, s.uri))
+    ordered = sorted(set(signals), key=_order)
     topo = Topology(edges)
     causes: dict[Signal, list[tuple[Signal, float]]] = defaultdict(list)
     for j, b in enumerate(ordered):
         for a in reversed(ordered[:j]):
-            if (b.at_utc - a.at_utc).total_seconds() > WINDOW_S:
+            if (_minute(b.at_utc) - _minute(a.at_utc)).total_seconds() > WINDOW_S:
                 break
             if not may_cause(a, b) or (gate and not topo.allows(a, b)):
                 continue
@@ -151,7 +180,8 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
             if lineage:
                 began[b] = min(lineage)
                 causes[b] = [(a, s) for a, s in causes[b]
-                             if a.type not in CHANGE_TYPES or a.at_utc <= began[b]]
+                             if a.type not in CHANGE_TYPES
+                             or _minute(a.at_utc) <= _minute(began[b])]
     return causes
 
 
@@ -168,7 +198,7 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
         return []
     causes = candidate_links(signals, edges, gate, priors)
     to_root: dict[Signal, float] = {}         # fewest links back to a root change
-    for b in sorted(set(signals), key=lambda s: (s.at_utc, s.uri)):
+    for b in sorted(set(signals), key=_order):
         if b not in causes:
             to_root[b] = 0 if b.type in CHANGE_TYPES else inf
         else:
@@ -197,4 +227,4 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
 
 __all__ = ["BEAM_WIDTH", "CHANGE_TYPES", "Chain", "DEFAULT_PRIOR", "MAX_LENGTH", "MIN_CONFIDENCE",
            "PRIORS", "Signal", "TELEMETRY", "Topology", "WINDOW_S",
-           "candidate_links", "correlate", "may_cause", "pair_score"]
+           "candidate_links", "correlate", "may_cause", "pair_score", "precedes"]
