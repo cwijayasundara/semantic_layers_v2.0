@@ -8,7 +8,7 @@
   * units: a series in seconds is scaled to ms (`v = v_raw * 1000`, `unit_raw="s"`).
     Seconds are recognised by a metric name ending `_seconds`, a `unit=s` tag/label,
     or, as the Atlas/Prometheus exports carry no unit marker, by a latency point
-    whose value is under 1/200 of the median of its peers (same name and non-app
+    whose value is under 1/50 of the median of its peers (same name and non-app
     tags, at least 50 points). The decision is per point, because the generator's
     unit injection can leave half a series in ms; originals stay in `v_raw`.
   * counters (`*_total`): `v` is the per-interval delta; a negative delta is a
@@ -37,7 +37,11 @@ from e2ekg.preprocess import selector as sel
 
 APP_KEYS = ("nf.app", "app", "service")
 RECENT_MIN, BASE_MIN, SHIFT_MIN, FLOOR_FRAC = 10, 30, 5.0, 0.05
-SECONDS_RATIO, MIN_PEERS = 1 / 200, 50
+# A change must also be big in absolute terms: counters' per-interval deltas follow the
+# diurnal curve and are noisy (reset streams, multi-interval gaps), so they need a 50%
+# level change; other series 10%. Sigma statistics alone flag a smooth trend.
+REL_MIN, COUNTER_REL_MIN, COUNTER_FLOOR_FRAC = 0.10, 0.50, 0.25
+SECONDS_RATIO, MIN_PEERS = 1 / 50, 50
 APP_URI_PREFIX = "https://kg.local/app/application/"
 
 
@@ -109,19 +113,53 @@ def clean_metrics(atlas_df: pl.DataFrame, prom_df: pl.DataFrame) -> pl.DataFrame
     pts = (pts.unique(subset=["series_key", "t"], keep="first", maintain_order=True)
            .join(dups, on=["series_key", "t"], how="left"))
 
-    # seconds -> ms, decided per point against its peers (same name and non-app tags):
-    # the units injector converts a series by its pre-drift key, so a series can be
-    # half ms and half seconds.
-    peer = (pts.filter(~pl.col("gap") & (pl.col("v_raw") > 0))
-            .group_by("_peer").agg(pl.col("v_raw").median().alias("_peer_med"),
-                                   pl.len().alias("_peer_n")))
-    pts = pts.join(peer, on="_peer", how="left")
+    # seconds -> ms, decided per emitter stream (the raw tag set as written), never per
+    # point: a stream is one unit end to end, and a point-wise rule would convert the
+    # quiet period and leave the post-incident (larger) values unconverted, inverting
+    # the anomaly. A stream is seconds when its own LOW level (10th percentile, so an
+    # incident that lifts the stream cannot hide it) is under 1/50 of the median of its
+    # peers (same name and non-app tags, at least 50 points). Normal latency spread across
+    # apps is about 40x and ms-vs-s is 1000x, so 1/50 separates them. A short stream
+    # (under 5 points; a one-off surface form) can sit wholly inside an incident, where
+    # the peer rule is blind, so it is re-decided against its own series: seconds when
+    # x1000 lands nearer the series' neighbouring values (within 15 min) than x1.
+    pos = ~pl.col("gap") & (pl.col("v_raw") > 0)
+    peer = (pts.filter(pos).group_by("_peer")
+            .agg(pl.col("v_raw").median().alias("_peer_med"), pl.len().alias("_peer_n")))
+    stream = (pts.filter(pos).group_by("_peer", "_sub")
+              .agg(pl.col("v_raw").quantile(0.1, "lower").alias("_stream_med"),
+                   pl.len().alias("_stream_n")))
+    pts = pts.join(peer, on="_peer", how="left").join(stream, on=["_peer", "_sub"], how="left")
     pts = pts.with_columns(_inferred=pl.col("name").str.contains("latency")
-                           & (pl.col("v_raw") > 0) & (pl.col("_peer_n") >= MIN_PEERS)
-                           & (pl.col("v_raw") < pl.col("_peer_med") * SECONDS_RATIO))
+                           & (pl.col("_peer_n") >= MIN_PEERS)
+                           & (pl.col("_stream_med") < pl.col("_peer_med") * SECONDS_RATIO))
     is_sec = (pl.col("name").str.ends_with("_seconds") | (pl.col("_unit_tag") == "s")
               | pl.col("_inferred").fill_null(False))
-    pts = pts.with_columns(unit_raw=pl.when(is_sec).then(pl.lit("s")), v=pl.col("v_raw"))
+    pts = pts.with_columns(_sec=is_sec.fill_null(False)).with_row_index("_i")
+    v1 = pl.when(pl.col("_sec")).then(pl.col("v_raw") * 1000).otherwise(pl.col("v_raw"))
+    ref = (pts.filter(pl.col("name").str.contains("latency") & (pl.col("_stream_n") >= 5)
+                      & pos).select("series_key", "t", v1.alias("_ref")).sort("t"))
+    tiny = (pts.filter(pl.col("name").str.contains("latency") & (pl.col("_stream_n") < 5)
+                       & pos & ~pl.col("_sec")).select("_i", "series_key", "t", "v_raw").sort("t"))
+    if tiny.height and ref.height:
+        tol = timedelta(minutes=15)
+        before = tiny.join_asof(ref.rename({"_ref": "_b"}), on="t", by="series_key",
+                                strategy="backward", tolerance=tol, check_sortedness=False)
+        both = before.join_asof(ref.rename({"_ref": "_f"}), on="t", by="series_key",
+                                strategy="forward", tolerance=tol, check_sortedness=False)
+
+        def nearer(ref_col: str) -> pl.Expr:     # True/False/null (no neighbour on that side)
+            return ((pl.col("v_raw") * 1000 / pl.col(ref_col)).log().abs()
+                    < (pl.col("v_raw") / pl.col(ref_col)).log().abs())
+        # flip only when every neighbour agrees: next to an incident edge one side is 100x away
+        near = (both.with_columns(_flip=pl.when(pl.col("_b").is_null() & pl.col("_f").is_null())
+                                  .then(False)
+                                  .otherwise(nearer("_b").fill_null(True)
+                                             & nearer("_f").fill_null(True)))
+                .filter(pl.col("_flip")).select("_i", "_flip"))
+        pts = pts.join(near, on="_i", how="left", maintain_order="left")
+        pts = pts.with_columns(_sec=pl.col("_sec") | pl.col("_flip").fill_null(False))
+    pts = pts.with_columns(unit_raw=pl.when(pl.col("_sec")).then(pl.lit("s")), v=pl.col("v_raw"))
     pts = pts.with_columns(v=pl.when(pl.col("unit_raw") == "s").then(pl.col("v_raw") * 1000)
                            .otherwise(pl.col("v")))
 
@@ -140,7 +178,7 @@ def clean_metrics(atlas_df: pl.DataFrame, prom_df: pl.DataFrame) -> pl.DataFrame
     pts = pts.with_columns(v=pl.when(counter).then(delta).otherwise(pl.col("v")))
     pts = pts.sort("series_key", "t", maintain_order=True)
     return pts.select("series_key", "app_uri", "name", "tags_norm", "t", "v", "v_raw",
-                      "unit_raw", "gap", "raw_id", "dup_raw_ids")
+                      "unit_raw", "gap", "raw_id", "dup_raw_ids", pl.col("_sub").alias("stream"))
 
 
 def _runs(flag: np.ndarray):
@@ -185,10 +223,14 @@ def metric_anomalies(clean_df: pl.DataFrame) -> pl.DataFrame:
             mad = np.nanmedian(np.abs(base - b_med[:, None]), axis=1)
         valid = ((~np.isnan(base)).sum(axis=1) >= max(6, b_n // 2)) & (
             (~np.isnan(recent)).sum(axis=1) >= 2)
-        sigma = np.maximum(1.4826 * mad, FLOOR_FRAC * np.abs(b_med))
+        counter = g["name"][0].endswith("_total")
+        floor = COUNTER_FLOOR_FRAC if counter else FLOOR_FRAC
+        sigma = np.maximum(1.4826 * mad, floor * np.abs(b_med))
         sigma = np.where(sigma > 0, sigma, 1e-9)
         shift = (rec_med - b_med) / sigma
-        flag = valid & (np.abs(shift) >= SHIFT_MIN)
+        rel = np.abs(rec_med - b_med) / np.maximum(np.abs(b_med), 1e-12)
+        flag = valid & (np.abs(shift) >= SHIFT_MIN) & (
+            rel >= (COUNTER_REL_MIN if counter else REL_MIN))
         covered = -1
         for i, j in _runs(flag):
             if i <= covered:
@@ -197,7 +239,9 @@ def metric_anomalies(clean_df: pl.DataFrame) -> pl.DataFrame:
             # pre-change baseline (a plateau is one anomaly, not a few minutes of one)
             k = j
             b0, s0 = b_med[i], sigma[i]
-            while k + 1 < n and abs(rec_med[k + 1] - b0) / s0 >= SHIFT_MIN:
+            while k + 1 < n and abs(rec_med[k + 1] - b0) / s0 >= SHIFT_MIN and (
+                    abs(rec_med[k + 1] - b0) / max(abs(b0), 1e-12)
+                    >= (COUNTER_REL_MIN if counter else REL_MIN)):
                 k += 1
             covered = k
             j = k

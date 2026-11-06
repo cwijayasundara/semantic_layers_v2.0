@@ -126,3 +126,67 @@ def test_synthetic_change_point_and_reset():
     assert a.height == 1 and a["direction"][0] == "up"
     assert abs((a["t_start"][0] - (t0 + timedelta(minutes=70))).total_seconds()) <= 300
     assert metric_row_keys(atlas, prom).height == 120
+
+
+def _propagation_set(p) -> set[str]:
+    """Apps that can see the fault: title-metadata-svc and everything upstream of it in the
+    catalog's dependency edges."""
+    callers: dict[str, set[str]] = {}
+    for f in table(p, "catalog")["fields"]:
+        d = json.loads(f)
+        for dep in d.get("dependencies") or []:
+            callers.setdefault(dep["app"], set()).add(d["id"])
+    seen, todo = {"title-metadata-svc"}, ["title-metadata-svc"]
+    while todo:
+        for c in callers.get(todo.pop(), ()):
+            if c not in seen:
+                seen.add(c)
+                todo.append(c)
+    return seen
+
+
+def _onset(p):
+    ans = json.loads((p.answers / "hero.json").read_text())
+    from datetime import datetime
+    return datetime.fromisoformat(ans["answer_key"]["causal_chain"][0]["at_utc"])
+
+
+def test_chain_latency_anomalies_point_up(preprocessed_hero):
+    """Units are decided per stream: a point-wise rule converted the quiet period and left
+    the larger post-incident values in seconds, so p50/p99 looked like they fell 1000x."""
+    a = anomalies(preprocessed_hero)
+    for app in ("title-metadata-svc", "title-batch-loader"):
+        x = a.filter((pl.col("app_uri") == app_uri(app))
+                     & pl.col("name").str.starts_with("server.latency"))
+        assert x.height > 0 and set(x["direction"]) == {"up"}, app
+
+
+def test_no_latency_stream_mixes_converted_and_raw_points(preprocessed_hero):
+    c = clean(preprocessed_hero).filter(pl.col("name").str.contains("latency"))
+    mixed = (c.group_by("series_key", "stream")
+             .agg(pl.col("unit_raw").is_null().sum().alias("raw"),
+                  pl.col("unit_raw").is_not_null().sum().alias("conv"))
+             .filter((pl.col("raw") > 0) & (pl.col("conv") > 0)))
+    assert mixed.height == 0
+
+
+def test_anomaly_precision_nothing_before_onset_nothing_off_the_propagation_set(
+        preprocessed_hero):
+    """Counters included: their delta noise and diurnal trend once raised anomalies on
+    api-gateway, evcache-titles, billing-* and cassandra-titles before the fault."""
+    a = anomalies(preprocessed_hero)
+    assert a.filter(pl.col("t_start") < _onset(preprocessed_hero)).height == 0
+    names = {u.removeprefix("https://kg.local/app/application/")
+             for u in a["app_uri"].drop_nulls()}
+    assert names <= _propagation_set(preprocessed_hero), names - _propagation_set(
+        preprocessed_hero)
+    assert a["app_uri"].null_count() == 0
+
+
+def test_unit_streams_match_the_injection_manifest(preprocessed_hero):
+    """Every point of an injected (metric, app) stream is seconds, so a 1000x jump between
+    neighbours of one series is a unit bug, not an incident."""
+    c = clean(preprocessed_hero).filter(pl.col("name").str.contains("latency")).sort("t")
+    jump = (c.with_columns(r=(pl.col("v") / pl.col("v").shift(1).over("series_key")))
+            .filter((pl.col("r") > 300) | (pl.col("r") < 1 / 300)))
+    assert jump.height == 0

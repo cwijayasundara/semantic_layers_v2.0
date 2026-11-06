@@ -62,14 +62,14 @@ def mine_templates(logs_df: pl.DataFrame) -> pl.DataFrame:
     lut = pl.DataFrame({"_m": list(tmpl_of), "template": list(tmpl_of.values())})
     lut = lut.with_columns(template_id=pl.col("template").map_elements(
         template_id, return_dtype=pl.String))
-    out = (logs_df.with_columns(_m=masked).join(lut, on="_m", how="left")
+    out = (logs_df.with_columns(_m=masked).join(lut, on="_m", how="left", maintain_order="left")
            .drop("_m"))
     # params once per distinct (template, msg), then joined back
     pairs = out.select("template", pl.col("msg").fill_null("").alias("_msg")).unique()
     pairs = pairs.with_columns(params=pl.struct("template", "_msg").map_elements(
         lambda r: _params(r["template"], r["_msg"]), return_dtype=pl.List(pl.String)))
     return (out.with_columns(_msg=pl.col("msg").fill_null(""))
-            .join(pairs, on=["template", "_msg"], how="left").drop("_msg"))
+            .join(pairs, on=["template", "_msg"], how="left", maintain_order="left").drop("_msg"))
 
 
 def _rank(level: pl.Expr) -> pl.Expr:
