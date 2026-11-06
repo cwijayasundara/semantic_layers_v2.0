@@ -298,3 +298,26 @@ def test_chains_run_from_a_source_one_per_root_ranked_and_cut_at_the_threshold()
     assert chains[0].confidence == pytest.approx(
         (pair_score(cfg, scale, 0.95) * pair_score(scale, lat, 0.85)
          * pair_score(lat, alert, 0.9) * pair_score(alert, inc, 0.95)) ** 0.25)
+
+
+@pytest.mark.xfail(strict=True, reason="R46: no ruled candidate rejects it (task-13 report, R46)")
+def test_a_change_landing_inside_a_condition_already_under_way_roots_no_chain():
+    # v-bad-deploy at 0.5 scale (full scale ranks the experiment second at 0.622): the
+    # deploy's lolomo errors begin at 17:30; the experiment lands at 17:33 on the
+    # allocator lolomo calls, next to a second lolomo error pattern of that condition.
+    edges = [("edge", "hg"), ("hg", "lolomo"), ("lolomo", "alloc")]
+    signals = [
+        sig("dep", "deployment", "lolomo", 0),
+        sig("log1", "log_error", "lolomo", 0, 0.929),
+        sig("m1", "metric_anomaly", "lolomo", 3, 0.988),
+        sig("exp", "experiment", "alloc", 3),
+        sig("log2", "log_error", "lolomo", 3, 0.885),
+        sig("m2", "metric_anomaly", "lolomo", 5, 0.973),
+        sig("mh", "metric_anomaly", "hg", 5, 0.904),
+        sig("lh", "log_error", "hg", 6, 0.924),
+        sig("mh2", "metric_anomaly", "hg", 10, 0.735),
+        sig("me", "metric_anomaly", "edge", 15, 0.944),
+        sig("alert", "alert", "edge", 20.5),
+        sig("inc", "incident", "edge", 24.5, opened_by=("alert",)),
+    ]
+    assert [c.links[0].uri for c in correlate(signals, edges, "urn:inc")] == ["urn:dep"]
