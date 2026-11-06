@@ -426,3 +426,15 @@ def test_a_causal_chain_is_a_hypothesis_and_a_walk_back_retracts_only_its_own_le
     (r,) = claims.filter(pl.col("kind") == "retraction").to_dicts()
     target = claims.filter(pl.col("claim_idx") == r["refers_to"]).row(0, named=True)
     assert target["kind"] == "hypothesis" and target["about_app_uri"] == app_uri("row-ranker")
+
+
+def test_sentences_do_not_split_inside_times_numbers_or_dotted_names(resolver, scripted_llm):
+    text = ("api-gateway deployed at 15:18, that lines up pretty well. "
+            "found it: the title-metadata-svc.asg.minInstances property went 48 to 12 at 14:52.")
+    df = _frame([("6000.000001", None, text)])
+    _, claims = extract_chat(df, resolver, scripted_llm)
+    quotes = [text[s:e].strip() for s, e in claims.select("span_start", "span_end").iter_rows()]
+    assert quotes and all(not q[0].isdigit() for q in quotes)
+    assert "api-gateway deployed at 15:18, that lines up pretty well." in quotes
+    assert any(q.endswith("property went 48 to 12 at 14:52.") and "minInstances" in q
+               for q in quotes)

@@ -20,7 +20,7 @@ _SERVICE_SUFFIX = ("svc", "api", "gateway", "loader", "ranker", "graphql", "allo
 _KEBAB = re.compile(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b")
 _ACRONYM = re.compile(r"\b(TMS|HPG)\b")
 _NICK = re.compile(rf"\bthe (?:[a-z]+ )?(?:{'|'.join(_SERVICE_SUFFIX)})\b")
-_SENT = re.compile(r"[^.?!:]+(?:[.?!:]+|$)")
+_SENT = re.compile(r"(?:(?![.?!:]+(?:\s|$))[\s\S])+(?:[.?!:]+(?=\s|$)|$)")
 
 _RETRACT = re.compile(r"scratch that|after all|ruling (?:them |it )?out", re.I)
 _MITIGATE = re.compile(r"\b(roll(?:ing)? ?back|rollback|revert|bump(?:ed)?|submitted|"
