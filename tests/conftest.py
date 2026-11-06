@@ -70,5 +70,48 @@ def preprocessed_control(tmp_path_factory, scripted_llm) -> Preprocessed:
 
 
 @pytest.fixture(scope="session")
+def preprocessed(tmp_path_factory, scripted_llm, preprocessed_hero, preprocessed_control):
+    """name -> Preprocessed for the hero, the control and every fault variant, each built once
+    (variants at fixture scale)."""
+    from e2ekg.generate.run import generate_scenario
+    from e2ekg.preprocess.run import preprocess_scenario
+    from e2ekg.scenario.variants import variant_scenarios
+    built = {"hero": preprocessed_hero, "v-control": preprocessed_control}
+
+    def get(name: str) -> Preprocessed:
+        if name not in built:
+            base = tmp_path_factory.mktemp(name)
+            raw, proc = base / "raw" / name, base / "processed" / name
+            generate_scenario(next(s for s in variant_scenarios() if s.name == name), raw,
+                              scale=FIXTURE_SCALE)
+            built[name] = Preprocessed(raw=raw, proc=proc, answers=base / "raw" / "_answers",
+                                       report=preprocess_scenario(raw, proc, llm=scripted_llm))
+        return built[name]
+    return get
+
+
+@pytest.fixture(scope="session")
+def harvested(tmp_path_factory, scripted_llm, preprocessed, harvested_hero, harvested_hero_as_of):
+    """(name, as_of=False) -> Harvested: the scenario's full store, or the as-of store the live
+    RCA reads (R34). One harvest per store, SHACL on, shared by every test."""
+    from e2ekg.graph.harvest import harvest, make_context
+    from e2ekg.preprocess.asof import live_cutoff
+    built = {("hero", False): harvested_hero, ("hero", True): harvested_hero_as_of}
+
+    def get(name: str, as_of: bool = False) -> Harvested:
+        if (name, as_of) not in built:
+            pp = preprocessed(name)
+            out = tmp_path_factory.mktemp("graph") / name / ("as_of" if as_of else "full")
+            cut = live_cutoff(pp.proc).as_of if as_of else None
+            ctx = make_context(name, pp.proc, out, llm=scripted_llm, as_of=cut)
+            report = harvest(ctx, out=out)
+            built[(name, as_of)] = Harvested(store=ctx.store, report=report, proc=pp.proc,
+                                             answers=pp.answers, out=out, as_of=cut,
+                                             symptom=ctx.symptom)
+        return built[(name, as_of)]
+    return get
+
+
+@pytest.fixture(scope="session")
 def harvested_hero_store(harvested_hero):
     return harvested_hero.store
