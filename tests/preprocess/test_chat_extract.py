@@ -287,6 +287,54 @@ def test_same_app_links_inside_a_thread_and_records_method(resolver, scripted_ll
     assert r["refers_to"] is not None and r["link_method"] in ("model", "thread_parent")
 
 
+def _two_message_extraction(hyp_surface, ret_surface, ret_ref=None):
+    from e2ekg.preprocess.chat_extract import MessageExtraction
+    lab = ThreadLabel(category="incident", sentiment="neutral", is_incident_related=True)
+    return BatchExtraction(messages=[
+        MessageExtraction(label=lab, claims=[Claim(kind="hypothesis", about_surface=hyp_surface,
+                                                   text_span=(0, 10), refers_to_claim_idx=None)]),
+        MessageExtraction(label=lab, claims=[Claim(kind="retraction", about_surface=ret_surface,
+                                                   text_span=(0, 10),
+                                                   refers_to_claim_idx=ret_ref)])])
+
+
+def test_retraction_links_to_its_direct_thread_parent_even_if_that_hypothesis_is_unresolved(
+        resolver):
+    """'looks like the deploy on the gateway, reverting' can name an app the resolver cannot
+    place; a reply 'scratch that, it's not api-gateway' still walks back its own parent."""
+    df = _frame([
+        ("5000.000001", None, "looks like the deploy on the gateway, reverting it now"),
+        ("5001.000001", "5000.000001", "scratch that, I don't think it's api-gateway after all"),
+    ])
+    out = _two_message_extraction(["zzz-unknown-thing"], ["api-gateway"])
+    _, claims = extract_chat(df, resolver, FakeClient({FakeClient.ANY_KEY: out}))
+    hyp = claims.filter(pl.col("kind") == "hypothesis").row(0, named=True)
+    ret = claims.filter(pl.col("kind") == "retraction").row(0, named=True)
+    assert hyp["about_app_uri"] is None
+    assert ret["refers_to"] == hyp["claim_idx"] and ret["link_method"] == "thread_parent"
+
+
+def test_retraction_naming_an_app_still_refuses_an_unresolved_hypothesis_outside_its_parent(
+        resolver):
+    df = _frame([
+        ("5100.000001", None, "looks like the deploy on the gateway, reverting it now"),
+        ("5101.000001", None, "scratch that, I don't think it's api-gateway after all"),
+    ])
+    out = _two_message_extraction(["zzz-unknown-thing"], ["api-gateway"], ret_ref=0)
+    _, claims = extract_chat(df, resolver, FakeClient({FakeClient.ANY_KEY: out}))
+    assert claims.filter(pl.col("kind") == "retraction")["refers_to"][0] is None
+
+
+def test_direct_parent_rule_does_not_cross_to_another_resolved_app(resolver):
+    df = _frame([
+        ("5200.000001", None, "api-gateway deployed at 15:18, that lines up."),
+        ("5201.000001", "5200.000001", "scratch that, I don't think it's title-metadata-svc"),
+    ])
+    out = _two_message_extraction(["api-gateway"], ["title-metadata-svc"])
+    _, claims = extract_chat(df, resolver, FakeClient({FakeClient.ANY_KEY: out}))
+    assert claims.filter(pl.col("kind") == "retraction")["refers_to"][0] is None
+
+
 def test_transport_errors_leave_unclassified_rows(slack_fixture, resolver):
     class Flaky:
         def structured(self, system, user, schema):

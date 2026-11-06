@@ -194,12 +194,13 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
     def same_thread(a: int, b: int) -> bool:
         return root(a) == root(b)
 
-    def compatible(rec: dict, tgt: dict) -> bool:
+    def compatible(rec: dict, tgt: dict, direct_parent: bool = False) -> bool:
         """A retraction may only walk back a claim about the same app. If it names an app
-        the target must name the same one (an unresolved target cannot be verified, so it
-        is refused); if it names none, only a claim in its own thread qualifies."""
+        the target must name the same one; an unresolved target cannot be verified, so it
+        is refused unless it is the retraction's direct thread parent (the reply itself is
+        the evidence). If the retraction names none, only a claim in its own thread qualifies."""
         if rec["uri"]:
-            return tgt["uri"] == rec["uri"]
+            return tgt["uri"] == rec["uri"] or (direct_parent and tgt["uri"] is None)
         return same_thread(rec["i"], tgt["i"])
 
     hyp_by_msg: dict[int, list[dict]] = defaultdict(list)
@@ -220,7 +221,8 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
         if target is None and row["thread_ts"]:               # 2. the message it replies to
             parent = by_ts.get((row["channel"], row["thread_ts"]))
             if parent is not None and parent in pos:
-                cands = [h for h in hyp_by_msg.get(pos[parent], []) if compatible(rec, h)]
+                cands = [h for h in hyp_by_msg.get(pos[parent], [])
+                         if compatible(rec, h, direct_parent=True)]
                 if cands:
                     target, method = cands[-1], "thread_parent"
         if target is None and rec["uri"]:                     # 3. earlier in its own thread
