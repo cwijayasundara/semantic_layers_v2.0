@@ -11,7 +11,9 @@ written by earlier enrichers) into typed triples in its own named graph:
 into `https://kg.local/graph/<name>/<scenario>`, so a rerun replaces, never
 appends (idempotent). Any exception becomes `EnrichmentResult(success=False)`
 (best effort: the harvest goes on). A failed enricher's graph is CLEARED rather
-than left stale, so the store never mixes outputs of two input versions.
+than left stale, so the store never mixes outputs of two input versions. An
+input graph (`graph:<name>` in `reads`) that is absent or empty fails the run:
+an enricher over a missing input reports failure, never an empty success.
 
 Provenance (core.ttl header): a node built from raw records (changes, alerts,
 pages, incidents, messages, catalog apps) carries one `ops:rawSelector` per raw
@@ -73,6 +75,11 @@ class Enricher(ABC):
         g = graph_uri(self.name, ctx.scenario)
         try:
             self.scenario = ctx.scenario
+            for r in self.reads:
+                if r.startswith("graph:") and not ctx.store.query(
+                        f"ASK {{ GRAPH <{graph_uri(r[len('graph:'):], ctx.scenario)}> "
+                        "{ ?s ?p ?o } }"):
+                    raise LookupError(f"input {r} is absent or empty")
             n = ctx.store.replace_graph(g, self.emit(self.analyze(self.fetch(ctx))))
             return EnrichmentResult(success=True, triples_added=n, error=None)
         except Exception as e:             # best effort: one enricher never blocks the rest

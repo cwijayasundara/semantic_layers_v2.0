@@ -95,6 +95,18 @@ def test_run_is_best_effort_and_a_failure_clears_the_stale_graph():
     assert ctx.store.quad_count() == 0
 
 
+def test_an_enricher_fails_when_a_graph_it_reads_is_absent_or_empty():
+    from e2ekg.graph.enrichers.history import HistoryEnricher
+    ctx = _Ctx()
+    r = HistoryEnricher().run(ctx)
+    assert r.success is False and "graph:alerts_incidents" in r.error
+    for name in ("alerts_incidents", "changes"):
+        ctx.store.replace_graph(graph_uri(name, "hero"), [(app_uri("a"), RDF.type, OPS.Incident)])
+    ctx.store.replace_graph(graph_uri("topology", "hero"), [])
+    r = HistoryEnricher().run(ctx)
+    assert r.success is False and "graph:topology" in r.error
+
+
 def test_a_field_moved_into_the_description_is_read_back():
     assert recovered({"severity": "SEV2"}, "severity") == "SEV2"
     moved = {"description": "spike (severity: SEV1) (urgency: high)"}
