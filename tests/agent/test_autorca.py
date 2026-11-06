@@ -335,7 +335,7 @@ def _model_facing_text(h, scripted_llm) -> dict[str, str]:
     """Everything the models read before any tool runs: every prompt, every tool's schema
     (its description and its arguments' descriptions), every specialist's description."""
     prompts = {p.name: p.read_text() for p in PROMPTS.glob("*.md")}
-    assert set(prompts) == {f"{n}.md" for n in [*SPECIALISTS, "autorca", "candidate_evidence"]}
+    assert set(prompts) == {f"{n}.md" for n in [*SPECIALISTS, "autorca", "candidate_evidence", "raw_only"]}
     tools = make_tools(copy_store(h.store), h.proc, "hero", "leak", llm=scripted_llm)
     return {**prompts,
             **{f"tool:{n}": json.dumps(convert_to_openai_tool(t)) for n, t in tools.items()},

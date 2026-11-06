@@ -148,6 +148,34 @@ def test_the_graph_arms_differ_by_the_evidence_tool(eval_root, eval_uri):
     assert offered["graph"] - {"candidate_evidence"} == offered["graph_no_evidence_tool"]
 
 
+def test_each_graph_run_starts_clean_and_leaves_no_state_behind(eval_root):
+    from e2ekg.graph.store import Store
+    graph = eval_root / "graph/hero/as_of/store"
+    before = Store(graph, read_only=True).quad_count()
+    listings = []
+
+    def policy_for(i: int):
+        def policy(messages, bound):
+            done = [m for m in messages if isinstance(m, ToolMessage)]
+            if not done:
+                return AIMessage("", tool_calls=[{"name": "write_file", "id": "w", "args": {
+                    "file_path": f"/evidence/note-{i}.md", "content": "n"}}])
+            if len(done) == 1:
+                return AIMessage("", tool_calls=[{"name": "ls", "args": {"path": "/evidence/"},
+                                                  "id": "l"}])
+            listings.append(done[-1].content)
+            return AIMessage("", tool_calls=[{"name": "RCAReport", "id": "r", "args": {
+                "verdict": "inconclusive", "hypotheses": [], "summary": "stub"}}])
+        return policy
+    for i in range(2):
+        run_one(RunSpec("hero", "graph", i), root=eval_root, evals_dir=eval_root / "evals",
+                model=fake_tool_model(policy_for(i)))
+    assert "note-0.md" in listings[0]
+    assert "note-1.md" in listings[1] and "note-0.md" not in listings[1]
+    assert Store(graph, read_only=True).quad_count() == before
+    assert not (eval_root / "agent").exists()
+
+
 def test_the_raw_only_agent_reads_the_as_of_raw_files_and_cannot_write(eval_root):
     out = {}
 
