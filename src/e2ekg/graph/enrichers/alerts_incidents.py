@@ -3,12 +3,14 @@
   * one ops:Alert per Radar alert id: ops:onApplication, ops:atTime = its
     earliest "firing" record (an alert seen only as "ok" has no time);
   * one ops:Page per PagerDuty page id: ops:onApplication, ops:atTime = its
-    earliest "triggered" record, ops:assignedTo the assignee;
+    earliest "triggered" record, ops:assignedTo the assignee, ops:forAlert the
+    alert its incident_key names (R40);
   * one ops:Incident per incident.io id: inc:incidentId, ops:atTime = the
     incident.created record, ops:severity, ops:affects = the latest record's
     affected services, inc:previouslyAffected = earlier ones it dropped (with
-    inc:correctedAt, the first record carrying the current list), and from the
-    resolution: ops:resolvedBy, ops:causeKind and ops:causeApp (postmortem);
+    inc:correctedAt, the first record carrying the current list), inc:openedBy the
+    page that opened it (`asof.opening_page`, the rule the live cutoff uses), and
+    from the resolution: ops:resolvedBy, ops:causeKind and ops:causeApp (postmortem);
   * one inc:IncidentVersion per incident.io record: inc:versionOf the incident,
     ops:atTime the record's time, and what that record itself states,
     ops:severity and inc:affectedService. The incident as known at time t is its
@@ -26,6 +28,7 @@ from e2ekg.graph.enricher import (
     NS, Enricher, json_fields, node, person, raw_selectors, read_table, recovered, string, ts,
 )
 from e2ekg.graph.uris import CHANGE_KINDS, app_uri, concept, scoped_uri
+from e2ekg.preprocess.asof import opening_page
 from e2ekg.preprocess.identity import APP_URI_PREFIX
 
 OPS, INC = NS["ops"], NS["inc"]
@@ -75,17 +78,24 @@ class AlertsIncidentsEnricher(Enricher):
         out_alerts = []
         for aid, d in sorted(first_by_id(alerts, "alert_id", "state", "firing").items()):
             out_alerts.append({"id": aid, "app": _app_of(d["rows"]), **d})
+        fired = {a["id"] for a in out_alerts if a["at"] is not None}
         out_pages = []
         for pid, d in sorted(first_by_id(pages, "page_id", "status", "triggered").items()):
             who = next((json_fields(r["fields"]).get("assignee") for r in d["rows"]
                         if json_fields(r["fields"]).get("assignee")), None)
+            key = next((k for r in d["rows"] if (k := json_fields(r["fields"]).get("incident_key"))),
+                       None)
             out_pages.append({"id": pid, "app": _app_of(d["rows"]), "who": who, **d,
+                              "alert": key if key in fired else None,
                               "who_ids": [r["raw_id"] for r in d["rows"]
                                           if json_fields(r["fields"]).get("assignee") == who]})
+        triggered = [r for r in pages if r["status"] == "triggered" and r["ts_utc"] is not None]
         out_inc = []
         for iid, d in sorted(first_by_id(incidents, "incident_id", "event",
                                          "incident.created").items()):
-            out_inc.append({"id": iid, **d, **_incident(d["rows"], apps)})
+            page = opening_page(triggered, d["at"]) if d["at"] is not None else None
+            out_inc.append({"id": iid, **d, **_incident(d["rows"], apps),
+                            "page": page and page["page_id"]})
         return out_alerts, out_pages, out_inc
 
     def emit(self, result):
@@ -99,6 +109,8 @@ class AlertsIncidentsEnricher(Enricher):
             u = scoped_uri("alrt", "page", sc, p["id"])
             yield u, RDF.type, OPS.Page
             yield from _common(u, p)
+            if p["alert"]:
+                yield u, OPS.forAlert, scoped_uri("alrt", "alert", sc, p["alert"])
             if p["who"]:
                 who, pt = person(p["who"], p["who_ids"])
                 yield u, OPS.assignedTo, who
@@ -117,6 +129,8 @@ class AlertsIncidentsEnricher(Enricher):
                 yield u, INC.previouslyAffected, app_uri(x)
             if i["corrected"] is not None:
                 yield u, INC.correctedAt, ts(i["corrected"])
+            if i["page"]:
+                yield u, INC.openedBy, scoped_uri("alrt", "page", sc, i["page"])
             if i["resolved_by"]:
                 who, pt = person(i["resolved_by"], i["resolved_ids"])
                 yield u, OPS.resolvedBy, who

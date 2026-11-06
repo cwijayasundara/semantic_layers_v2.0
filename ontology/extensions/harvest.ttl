@@ -73,6 +73,13 @@ inc:versionOf a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:rang
 inc:affectedService a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:range ops:Application ;
     rdfs:label "affected service" ; rdfs:comment "An affected service the version's record lists." .
 
+# Why: core.ttl has ops:forAlert (Page -> Alert) but nothing tying an incident to the
+# page it was opened from, so "which alert opened this incident?" had no answer. The
+# correlation engine needs it: an incident is caused only by the alert its page names (R40).
+inc:openedBy a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Page ;
+    rdfs:label "opened by" ;
+    rdfs:comment "The page an incident was opened from: the last page triggered at or before the incident was created." .
+
 # Why: core.ttl says a config change carries "old and new values" and an
 # allocation change is "of an A/B test cell", but defines no properties for
 # them; and a cancelled ASG activity is still an ops:ScalingEvent (core header)

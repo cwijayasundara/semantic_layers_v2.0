@@ -14,7 +14,7 @@ from e2ekg.graph.enrichers.logs import access_status, error_category
 from e2ekg.graph.enrichers.topology import merge_edges
 from e2ekg.graph.shacl import ENRICHER_NAMES, LATER_STAGES
 from e2ekg.graph.store import Store, graph_uri
-from e2ekg.graph.uris import NS, app_uri
+from e2ekg.graph.uris import NS, app_uri, scoped_uri
 from e2ekg.preprocess.selector import Selector, select, selected_counts, selected_raw_ids
 
 OPS = NS["ops"]
@@ -384,6 +384,20 @@ def test_alerts_pages_incidents(harvested_hero):
     pages = q(st, "SELECT ?h WHERE { ?p a ops:Page ; ops:atTime ?t ; ops:assignedTo/team:handle "
                   "?h } LIMIT 1")
     assert pages
+
+
+def test_an_incident_is_opened_by_its_last_page_which_names_the_alert_behind_it(harvested_hero):
+    st = harvested_hero.store
+    rows = q(st, "SELECT ?id ?pt ?alert WHERE { ?i inc:incidentId ?id ; inc:openedBy ?p . "
+                 "?p ops:atTime ?pt . OPTIONAL { ?p ops:forAlert ?alert } }")
+    by = {r["id"]: r for r in rows}
+    live = by.pop("INC-5377")
+    assert (live["pt"], live["alert"]) == ("2026-10-14T22:30:30Z",
+                                           str(scoped_uri("alrt", "alert", "hero", "radar-09000")))
+    assert by and all(r["alert"] is None for r in by.values())       # history pages name none
+    shed = q(st, "SELECT ?a WHERE { ?p ops:forAlert ?a ; ops:onApplication ?app . "
+                 f"FILTER(?app = <{app_uri('edge-gateway')}>) }}")
+    assert shed == [{"a": str(scoped_uri("alrt", "alert", "hero", "radar-09100"))}]
 
 
 def test_every_incident_record_is_a_version_with_its_own_time(harvested_hero):

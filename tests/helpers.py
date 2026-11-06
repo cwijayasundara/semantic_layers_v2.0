@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 
 from e2ekg.scenario.model import (
     AnswerKey, Application, DependencyEdge, Fault, Scenario, Window,
