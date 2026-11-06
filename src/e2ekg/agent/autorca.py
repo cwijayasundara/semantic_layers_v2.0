@@ -116,12 +116,12 @@ def run_rca(alert_id: str, scenario: str, *, root: Path = Path("data"),
                                            "return the RCAReport.")]},
                 config={"recursion_limit": RECURSION_LIMIT, "callbacks": callbacks or []})
         except GraphRecursionError:
-            return _failed(f"GraphRecursionError: no report within {RECURSION_LIMIT} steps")
+            return failed(f"GraphRecursionError: no report within {RECURSION_LIMIT} steps")
     report = out.get("structured_response")
-    return report if report is not None else _failed(
+    return report if report is not None else failed(
         "no structured response: the agent stopped without returning an RCAReport")
 
 
-def _failed(why: str) -> FailedRCA:
+def failed(why: str) -> FailedRCA:
     return FailedRCA(verdict="inconclusive", hypotheses=[], summary=f"run failed: {why}",
                      failure=why)
