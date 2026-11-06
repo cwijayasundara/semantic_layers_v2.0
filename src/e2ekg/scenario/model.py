@@ -119,7 +119,19 @@ class Scenario(_Frozen):
         known = {a.id for a in self.catalog}
         refs = [x for e in self.edges for x in (e.caller, e.callee)]
         refs += [c.app for c in self.changes]
+        refs += [self.fault.target] if self.fault.target is not None else []
+        refs += [link.app for link in self.answer_key.causal_chain]
+        for h in self.history:
+            refs.append(h.affected)
+            if h.cause_app is not None:
+                refs.append(h.cause_app)
         for ref in refs:
             if ref not in known:
                 raise ValueError(f"unknown app {ref!r}")
+        change_ids = {c.id for c in self.changes}
+        cids = [self.fault.trigger_change_id, self.answer_key.root_cause_change_id]
+        cids += list(self.answer_key.red_herring_change_ids)
+        for cid in cids:
+            if cid is not None and cid not in change_ids:
+                raise ValueError(f"unknown change {cid!r}")
         return self
