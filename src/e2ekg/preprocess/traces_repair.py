@@ -47,7 +47,13 @@ def edge_keys(spans_df: pl.DataFrame) -> pl.DataFrame:
 
 
 def edge_fingerprints(spans_df: pl.DataFrame) -> pl.DataFrame:
-    e = edge_keys(spans_df).with_columns(
+    return aggregate_edges(edge_keys(spans_df))
+
+
+def aggregate_edges(keyed: pl.DataFrame) -> pl.DataFrame:
+    """Keyed spans (caller_uri, callee_uri, key, ts_utc, duration_us, status_code) -> one
+    row per (edge, minute)."""
+    e = keyed.with_columns(
         minute=pl.col("ts_utc").dt.truncate("1m"),
         _ms=pl.col("duration_us") / UNIT_US,
         _err=(pl.col("status_code") == "ERROR").cast(pl.Float64))

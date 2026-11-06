@@ -2,7 +2,10 @@
 import argparse
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+
+AS_OF_LIVE = "live"
 
 
 def _scenarios(name: str, seed: int):
@@ -183,8 +186,11 @@ def _cmd_harvest(args: argparse.Namespace) -> int:
     bad = 0
     for name in _raw_scenarios(proc, args.scenario):
         t = time.perf_counter()
-        ctx = make_context(name, proc / name, out / name, llm=llm)
-        r = harvest(ctx, out=out / name, shacl=not args.no_shacl)
+        as_of, dest = _as_of(args.as_of, proc / name), out / name
+        if as_of is not None:
+            dest = dest / "as_of"
+        ctx = make_context(name, proc / name, dest, llm=llm, as_of=as_of)
+        r = harvest(ctx, out=dest, shacl=not args.no_shacl)
         failed = sorted(k for k, v in r.results.items() if not v.success)
         shacl = {True: "clean", False: "VIOLATIONS", None: "skipped"}[r.shacl_ok]
         print(f"{name}: {r.quads} quads, SHACL {shacl}, failed enrichers "
@@ -197,6 +203,22 @@ def _cmd_harvest(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def _as_of(value: str | None, proc: Path) -> datetime | None:
+    """The --as-of cutoff: an ISO instant with a zone, or the live incident's (R21)."""
+    from e2ekg.preprocess.asof import live_cutoff
+    if value is None:
+        return None
+    if value == AS_OF_LIVE:
+        c = live_cutoff(proc)
+        print(f"{proc.name}: as of {c.as_of.isoformat()} ({c.incident_id}: alert "
+              f"{c.alert_id or '(page)'} at {c.alert_at.isoformat()} + 30 min)", flush=True)
+        return c.as_of
+    t = datetime.fromisoformat(value)
+    if t.tzinfo is None:
+        raise SystemExit(f"--as-of {value}: give a zone (e.g. 2026-10-14T23:00:00Z)")
+    return t.astimezone(UTC)
+
+
 def _add_harvest(sub) -> None:
     p = sub.add_parser("harvest", help="load processed tables into the knowledge graph")
     p.add_argument("--scenario", default="hero", help="hero, a v-... variant, or all")
@@ -205,6 +227,9 @@ def _add_harvest(sub) -> None:
     p.add_argument("--llm", choices=("none", "scripted", "fireworks"), default="none",
                    help="identity picks for names the catalog does not match outright")
     p.add_argument("--no-shacl", action="store_true", help="skip SHACL validation")
+    p.add_argument("--as-of", nargs="?", const=AS_OF_LIVE, default=None, metavar="TS",
+                   help="build the as-of store at <out>/<scenario>/as_of: only what was "
+                        "observable at TS (no TS: the live incident's alert + 30 min, R21)")
     p.set_defaults(func=_cmd_harvest)
 
 

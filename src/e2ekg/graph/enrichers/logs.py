@@ -32,7 +32,9 @@ import polars as pl
 from rdflib import URIRef
 from rdflib.namespace import RDF
 
-from e2ekg.graph.enricher import NS, Enricher, dec, finite, integer, node, read_table, string, ts
+from e2ekg.graph.enricher import (
+    NS, Enricher, dec, finite, integer, node, read_table, scan_table, string, ts,
+)
 from e2ekg.graph.uris import concept
 from e2ekg.preprocess import selector as sel
 
@@ -108,7 +110,7 @@ class LogPatternEnricher(Enricher):
     reads = ("derived/rows_logs", "derived/fp_log_buckets", "derived/fp_log_spikes", "logs")
 
     def fetch(self, ctx):
-        rows = pl.scan_parquet(ctx.proc_root / "derived" / "rows_logs.parquet")
+        rows = scan_table(ctx, "derived/rows_logs")
         timed = (rows.filter(pl.col("ts_utc").is_not_null()).group_by("app_uri", "key")
                  .agg(pl.len().alias("n"), pl.col("ts_utc").min().alias("t0"),
                       pl.col("ts_utc").max().alias("t1")))
@@ -120,7 +122,7 @@ class LogPatternEnricher(Enricher):
         levels = (read_table(ctx, "derived/fp_log_buckets", ["app_uri", "template_id",
                                                              "error_level"])
                   .unique().to_dicts())
-        logs = pl.scan_parquet(ctx.proc_root / "logs.parquet")
+        logs = scan_table(ctx, "logs")
         text = (logs.select("template_id", "template").unique("template_id", keep="first")
                 .collect().sort("template_id"))
         access_ids = [t for t, x in text.iter_rows() if x and _METHOD.match(x)
@@ -223,6 +225,7 @@ def _refine(access: pl.DataFrame) -> tuple[list[dict], list[dict]]:
         return [], []
     t_min = access["ts_utc"].min()
     t_max = access["ts_utc"].max()
+    t_end = t_max + timedelta(microseconds=1)     # a window never runs past the last line
     nb = int((t_max - t_min) / BUCKET) + 1
     patterns, spikes = [], []
     for (app, tid, status), g in st.sort("app_uri", "template_id", "status", "ts_utc",
@@ -237,7 +240,7 @@ def _refine(access: pl.DataFrame) -> tuple[list[dict], list[dict]]:
         idx = ((g["ts_utc"] - t_min) / BUCKET).cast(pl.Int64).to_numpy()
         counts = np.bincount(idx, minlength=nb).astype(float)
         for i, j, z in bursts(counts):
-            ws, we = t_min + i * BUCKET, t_min + (j + 1) * BUCKET
+            ws, we = t_min + i * BUCKET, min(t_min + (j + 1) * BUCKET, t_end)
             spikes.append({"app_uri": app, "template_id": tid, "status": int(status),
                            "t_start": ws, "t_end": we, "count": int(counts[i:j + 1].sum()),
                            "z": z})

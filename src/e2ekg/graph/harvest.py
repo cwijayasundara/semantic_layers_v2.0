@@ -7,9 +7,15 @@ The ontology (core, schemes, extensions) is loaded into its own graph, then the
 ENRICHERS run in order, each replacing its own named graph (a rerun converges
 to the same store), then SHACL validates the union, and the data graphs are
 dumped as sorted Turtle to `<out>/harvest.ttl` with a JSON report beside it.
-The store itself lives at `<out>/store`."""
+The store itself lives at `<out>/store`.
+
+An as-of harvest (`make_context(..., as_of=t)`, R34) reads every processed table
+through `e2ekg.preprocess.asof`, so its store holds only what was observable at t.
+The live RCA reads that store; the full store serves the CQs, history and the
+flywheel. The CLI writes it beside the full one, at `<out>/as_of`."""
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -35,11 +41,12 @@ class HarvestReport:
     shacl_text: str = ""
 
 
-def make_context(scenario: str, proc_root: Path, out: Path, llm=None) -> HarvestContext:
+def make_context(scenario: str, proc_root: Path, out: Path, llm=None,
+                 as_of: datetime | None = None) -> HarvestContext:
     proc_root = Path(proc_root)
     catalog = catalog_from_table(pl.read_parquet(proc_root / "catalog.parquet"))
     return HarvestContext(scenario=scenario, proc_root=proc_root, store=Store(Path(out) / "store"),
-                          resolver=Resolver(catalog, llm), llm=llm)
+                          resolver=Resolver(catalog, llm), llm=llm, as_of=as_of)
 
 
 def harvest(ctx: HarvestContext, out: Path | None = None, shacl: bool = True) -> HarvestReport:
@@ -52,7 +59,8 @@ def harvest(ctx: HarvestContext, out: Path | None = None, shacl: bool = True) ->
     report = HarvestReport(results=results, shacl_ok=ok, quads=ctx.store.quad_count(),
                            shacl_text=text)
     (out / "harvest.json").write_text(json.dumps(
-        {"scenario": ctx.scenario, "quads": report.quads, "shacl_ok": ok,
+        {"scenario": ctx.scenario, "as_of": ctx.as_of and ctx.as_of.isoformat(),
+         "quads": report.quads, "shacl_ok": ok,
          "results": {k: asdict(v) for k, v in results.items()}}, indent=2) + "\n")
     return report
 

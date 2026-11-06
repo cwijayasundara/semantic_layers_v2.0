@@ -40,6 +40,7 @@ from rdflib.namespace import RDF, RDFS, XSD
 
 from e2ekg.graph.store import Store, Triple, graph_uri
 from e2ekg.graph.uris import NS, person_uri, uri
+from e2ekg.preprocess import asof
 
 OPS, PROV, TEAM = NS["ops"], NS["prov"], NS["team"]
 
@@ -58,6 +59,7 @@ class HarvestContext:
     store: Store
     resolver: Any            # e2ekg.preprocess.identity.Resolver
     llm: Any                 # e2ekg.llm.LLMClient or None
+    as_of: datetime | None = None    # the cutoff of an as-of store (R34); None: the whole window
 
 
 class Enricher(ABC):
@@ -92,10 +94,15 @@ class Enricher(ABC):
 
 # --- shared fetch / emit helpers -----------------------------------------------------
 
+def scan_table(ctx: HarvestContext, name: str) -> pl.LazyFrame:
+    """A processed table (`<proc>/<name>.parquet`; `name="derived/<x>"` for a derived
+    one) as observable at `ctx.as_of`. Every enricher reads its tables through here."""
+    return asof.scan(ctx.proc_root, name, ctx.as_of)
+
+
 def read_table(ctx: HarvestContext, name: str, columns: list[str] | None = None):
-    """A processed table: `<proc>/<name>.parquet`, or `<proc>/derived/<x>.parquet`
-    for `name="derived/<x>"`."""
-    return pl.read_parquet(Path(ctx.proc_root) / f"{name}.parquet", columns=columns)
+    lf = scan_table(ctx, name)
+    return (lf.select(columns) if columns else lf).collect()
 
 
 def json_fields(s: str | None) -> dict:

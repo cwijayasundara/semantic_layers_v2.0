@@ -2,7 +2,7 @@
 
 Session fixtures: a scale-0.05 hero raw tree preprocessed once with the
 scripted LLM (so the chat tables exist), and that tree harvested once into an
-on-disk Oxigraph store. The generator builds the fixture (tests may use it);
+on-disk Oxigraph store, plus an as-of store of the same tree. The generator builds the fixture (tests may use it);
 the pipeline under test never imports `e2ekg.generate` (R6). Tests may read
 `_answers/` (the oracle), the pipeline may not (R5)."""
 from dataclasses import dataclass
@@ -28,6 +28,7 @@ class Harvested:
     proc: Path
     answers: Path
     out: Path        # the harvest output directory (store/ and harvest.ttl)
+    as_of: object = None   # the cutoff of an as-of store (datetime), None for the full store
 
 
 @pytest.fixture(scope="session")
@@ -57,6 +58,19 @@ def harvested_hero(tmp_path_factory, preprocessed_hero, scripted_llm) -> Harvest
     report = harvest(ctx, out=out)
     return Harvested(store=ctx.store, report=report, proc=preprocessed_hero.proc,
                      answers=preprocessed_hero.answers, out=out)
+
+
+@pytest.fixture(scope="session")
+def harvested_hero_as_of(tmp_path_factory, preprocessed_hero, scripted_llm) -> Harvested:
+    """The same tree harvested as of the live incident's cutoff (R34)."""
+    from e2ekg.graph.harvest import harvest, make_context
+    from e2ekg.preprocess.asof import live_cutoff
+    out = tmp_path_factory.mktemp("graph") / "hero" / "as_of"
+    as_of = live_cutoff(preprocessed_hero.proc).as_of
+    ctx = make_context("hero", preprocessed_hero.proc, out, llm=scripted_llm, as_of=as_of)
+    report = harvest(ctx, out=out)
+    return Harvested(store=ctx.store, report=report, proc=preprocessed_hero.proc,
+                     answers=preprocessed_hero.answers, out=out, as_of=as_of)
 
 
 @pytest.fixture(scope="session")

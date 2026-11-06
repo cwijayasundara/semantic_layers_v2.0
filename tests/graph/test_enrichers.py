@@ -307,8 +307,10 @@ def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
     return len(sels), bad
 
 
-def test_fingerprint_counts_equal_their_selectors(harvested_hero, preprocessed_hero):
-    n, bad = fingerprint_count_mismatches(harvested_hero.store, preprocessed_hero.proc)
+@pytest.mark.parametrize("store", ["harvested_hero", "harvested_hero_as_of"])
+def test_fingerprint_counts_equal_their_selectors(request, preprocessed_hero, store):
+    n, bad = fingerprint_count_mismatches(request.getfixturevalue(store).store,
+                                          preprocessed_hero.proc)
     assert n > 1000 and bad == {}
 
 
