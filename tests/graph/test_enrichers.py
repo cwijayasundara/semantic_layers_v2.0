@@ -15,7 +15,7 @@ from e2ekg.graph.enrichers.topology import merge_edges
 from e2ekg.graph.shacl import ENRICHER_NAMES, LATER_STAGES
 from e2ekg.graph.store import Store, graph_uri
 from e2ekg.graph.uris import NS, app_uri
-from e2ekg.preprocess.selector import Selector, select
+from e2ekg.preprocess.selector import Selector, select, selected_counts, selected_raw_ids
 
 OPS = NS["ops"]
 PFX = """PREFIX ops: <https://kg.local/ops#>
@@ -239,20 +239,35 @@ def test_traces_edges_cover_every_span(harvested_hero, preprocessed_hero):
     assert rows and all(r["k"] == "1" for r in rows)
 
 
-def test_fingerprint_counts_equal_their_selectors(harvested_hero, preprocessed_hero):
-    st = harvested_hero.store
-    rows = q(st, "SELECT ?x ?sel ?n WHERE { ?x a ?c ; ops:rawSelector ?sel ; ops:count ?n "
-                 "VALUES ?c { ops:LogSpike ops:MetricSeries trc:TraceEdge "
-                 "ops:TraceEdgeFingerprint ops:LogPattern } "
-                 "FILTER NOT EXISTS { ?x log:refines ?p } } ORDER BY ?x")
-    sels, count = defaultdict(list), {}
+def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
+    """(fingerprint nodes checked, {node: (ops:count, rows its selectors select)} where they differ)."""
+    rows = q(store, "SELECT ?x ?sel ?n WHERE { ?x a ?c ; ops:rawSelector ?sel ; ops:count ?n "
+                    "VALUES ?c { ops:LogSpike ops:MetricSeries trc:TraceEdge "
+                    "ops:TraceEdgeFingerprint ops:LogPattern } "
+                    "FILTER NOT EXISTS { ?x ops:ofPattern?/log:refines ?p } }")
+    sels, count = defaultdict(set), {}
     for r in rows:
-        sels[r["x"]].append(r["sel"])
+        sels[r["x"]].add(r["sel"])
         count[r["x"]] = int(r["n"])
-    assert len(sels) > 100
-    for x in sorted(sels)[:: max(1, len(sels) // 40)]:
-        got = sum(select(preprocessed_hero.proc, Selector.from_json(s)).height for s in sels[x])
-        assert got == count[x], x
+    got = selected_counts(proc, [s for v in sels.values() for s in v])
+    bad = {x: (count[x], sum(got[s] for s in v)) for x, v in sels.items()
+           if sum(got[s] for s in v) != count[x]}
+    return len(sels), bad
+
+
+def test_fingerprint_counts_equal_their_selectors(harvested_hero, preprocessed_hero):
+    n, bad = fingerprint_count_mismatches(harvested_hero.store, preprocessed_hero.proc)
+    assert n > 1000 and bad == {}
+
+
+def test_select_and_the_batch_resolvers_agree(preprocessed_hero):
+    fp = pl.read_parquet(preprocessed_hero.proc / "derived" / "fp_edges.parquet").head(200)
+    sels = list(fp["selector"])
+    counts = selected_counts(preprocessed_hero.proc, sels)
+    one = {s: select(preprocessed_hero.proc, Selector.from_json(s)) for s in sels}
+    assert counts == {s: d.height for s, d in one.items()} == dict(zip(sels, fp["n"]))
+    assert selected_raw_ids(preprocessed_hero.proc, sels) == {
+        r for d in one.values() for r in d["raw_id"]}
 
 
 def test_alerts_pages_incidents(harvested_hero):

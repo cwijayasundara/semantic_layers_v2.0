@@ -59,26 +59,43 @@ def rows_path(proc_root: Path, source: str) -> Path:
     return Path(proc_root) / "derived" / f"rows_{source}.parquet"
 
 
-def select(proc_root: Path, sel: Selector) -> pl.DataFrame:
-    if sel.source not in SOURCES:
-        raise ValueError(f"unknown selector source {sel.source!r}")
-    where, params = ["app_uri IS NOT DISTINCT FROM ?"], [sel.app_uri]
-    if sel.key is not None:
-        where.append("key = ?")
-        params.append(sel.key)
-    if sel.t_start == sel.t_end:
-        where.append("ts_utc IS NULL")
-    else:
-        where.append("ts_utc >= ? AND ts_utc < ?")
-        params += [sel.t_start, sel.t_end]
+# The one definition of "selector s selects row r". select, selected_raw_ids and
+# selected_counts all join through it, so a count check proves what select() returns.
+_MATCHES = ("r.app_uri IS NOT DISTINCT FROM s.app_uri AND (s.key IS NULL OR r.key = s.key) "
+            "AND CASE WHEN s.t_start = s.t_end THEN r.ts_utc IS NULL "
+            "ELSE r.ts_utc >= s.t_start AND r.ts_utc < s.t_end END")
+_SEL_SCHEMA = {"selector": pl.String, "app_uri": pl.String, "key": pl.String,
+               "t_start": pl.Datetime("us", "UTC"), "t_end": pl.Datetime("us", "UTC")}
+
+
+def _join(proc_root: Path, selectors: list[str], projection: str, tail: str = "") -> list:
+    """Per source, `SELECT <projection> FROM rows r JOIN selectors s ON _MATCHES <tail>`."""
+    by_source: dict[str, list[dict]] = {}
+    for s in sorted(set(selectors)):
+        x = Selector.from_json(s)
+        if x.source not in SOURCES:
+            raise ValueError(f"unknown selector source {x.source!r}")
+        by_source.setdefault(x.source, []).append(
+            {"selector": s, "app_uri": x.app_uri, "key": x.key, "t_start": x.t_start,
+             "t_end": x.t_end})
+    out = []
     con = duckdb.connect()
     try:
-        # path is interpolated; parameters carry every user-controlled value
-        q = (f"SELECT * FROM read_parquet('{rows_path(proc_root, sel.source).as_posix()}') "
-             f"WHERE {' AND '.join(where)}")
-        return pl.from_arrow(con.sql(q, params=params).to_arrow_table())
+        for source, rows in sorted(by_source.items()):
+            con.register("sel", pl.DataFrame(rows, schema=_SEL_SCHEMA).to_arrow())
+            # the path is interpolated; every selector value arrives as a registered column
+            rows_file = rows_path(proc_root, source).as_posix()
+            out.append(con.sql(f"SELECT {projection} FROM read_parquet('{rows_file}') r "
+                               f"JOIN sel s ON {_MATCHES} {tail}").to_arrow_table())
+            con.unregister("sel")
     finally:
         con.close()
+    return out
+
+
+def select(proc_root: Path, sel: Selector) -> pl.DataFrame:
+    (rows,) = _join(proc_root, [sel.to_json()], "r.*")
+    return pl.from_arrow(rows)
 
 
 def minute_end(t: datetime) -> datetime:
@@ -86,29 +103,16 @@ def minute_end(t: datetime) -> datetime:
 
 
 def selected_raw_ids(proc_root: Path, selectors: list[str]) -> set[str]:
-    """Raw ids of every row any of `selectors` (JSON) selects, in one DuckDB join per source."""
-    by_source: dict[str, list[dict]] = {s: [] for s in SOURCES}
-    for s in set(selectors):
-        x = Selector.from_json(s)
-        by_source[x.source].append({"app_uri": x.app_uri, "key": x.key,
-                                    "t_start": x.t_start, "t_end": x.t_end})
-    schema = {"app_uri": pl.String, "key": pl.String,
-              "t_start": pl.Datetime("us", "UTC"), "t_end": pl.Datetime("us", "UTC")}
+    """Raw ids of every row any of `selectors` (JSON) selects, in one join per source."""
     out: set[str] = set()
-    con = duckdb.connect()
-    try:
-        for source, rows in by_source.items():
-            if not rows:
-                continue
-            con.register("sel", pl.DataFrame(rows, schema=schema).to_arrow())
-            rows_file = rows_path(proc_root, source).as_posix()
-            out |= {r[0] for r in con.execute(
-                f"SELECT DISTINCT r.raw_id FROM read_parquet('{rows_file}') r "
-                "JOIN sel s ON r.app_uri IS NOT DISTINCT FROM s.app_uri "
-                "AND (s.key IS NULL OR r.key = s.key) "
-                "AND ((s.t_start = s.t_end AND r.ts_utc IS NULL) "
-                "OR (r.ts_utc >= s.t_start AND r.ts_utc < s.t_end))").fetchall()}
-            con.unregister("sel")
-    finally:
-        con.close()
+    for t in _join(proc_root, selectors, "DISTINCT r.raw_id"):
+        out |= set(t.column("raw_id").to_pylist())
+    return out
+
+
+def selected_counts(proc_root: Path, selectors: list[str]) -> dict[str, int]:
+    """Rows each selector (JSON) selects, zero included, in one join per source."""
+    out = dict.fromkeys(selectors, 0)
+    for t in _join(proc_root, selectors, "s.selector, COUNT(*) AS n", "GROUP BY s.selector"):
+        out.update(zip(t.column("selector").to_pylist(), t.column("n").to_pylist(), strict=True))
     return out
