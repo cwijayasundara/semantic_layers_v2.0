@@ -56,11 +56,14 @@ class CsvEventsParser:
             raise Unparseable("csv: more cells than header columns")
         fields: dict[str, str] = {}
         residual: dict[str, str] = {}
+        later = []
         for col, cell in zip(self.columns, cells, strict=False):
-            if col in fields:  # repeated header column: first wins, the rest are `col#n`
-                residual[dup_key(residual, col)] = cell
+            if col in fields:
+                later.append((col, cell))
             else:
                 fields[col] = cell
+        for col, cell in later:  # repeats: `col#n`, free in fields and residual
+            residual[dup_key(fields | residual, col)] = cell
         ts = next((fields[c] for c in self.ts_columns if fields.get(c)), None)
         return row(ts, first_str(fields, ("app",)), fields, residual, row_kind="record",
                    external_id=first_str(fields, self.id_columns), **base)

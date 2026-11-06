@@ -97,3 +97,31 @@ def test_otlp_envelope_keys_are_prefixed_and_not_overwritten():
     res = r["rows"][0]["_residual"]
     assert res["resourceSpans.schemaUrl"] == "env" and res["schemaUrl"] == "span"
     assert r["_residual"]["resourceSpans.schemaUrl"] == "env"
+
+
+def test_csv_residual_suffix_never_collides_with_a_real_column():
+    for header in (b"ts,app,app#2,app", b"ts,app,app,app#2"):
+        data = header + b"\n1,a,b,c\n"
+        p = PARSERS["csv_events"].for_file(data)
+        _, rec = (p.parse(data[o:o + n]) for o, n in p.split(data))
+        m = merged(rec)
+        assert sorted(m.values()) == ["1", "a", "b", "c"] and len(m) == 4
+
+
+def test_gitlog_sha_and_message_headers_do_not_overwrite_parser_fields():
+    raw = b"commit " + b"a" * 40 + b"\nsha: other\nmessage: hdr\n\n    [svc] real"
+    m = merged(PARSERS["gitlog"].parse(raw))
+    assert m["sha"] == "a" * 40 and m["message"] == "[svc] real"
+    assert sorted(m.values()) == sorted(["a" * 40, "[svc] real", " other", " hdr"])
+
+
+def test_json_hash_suffix_collision():
+    r = PARSERS["json_lines"].parse(b'{"ts":1,"a#2":1,"a":2,"a":3}')
+    assert sorted(merged(r).values()) == [1, 1, 2, 3]
+
+
+def test_otlp_synthetic_attribute_key_does_not_overwrite_a_real_key():
+    r = _otlp({"resource": {"attributes": []},
+               "scopeSpans": [{"spans": [_span(**{"attributes[0]": "real"}, attributes=[7])]}]})
+    res = r["rows"][0]["_residual"]
+    assert sorted(map(str, res.values())) == ["7", "real"]

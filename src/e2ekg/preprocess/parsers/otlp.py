@@ -47,6 +47,10 @@ def any_value(v: dict):
     return v
 
 
+def _free(residual: dict, key: str) -> str:
+    return dup_key(residual, key) if key in residual else key
+
+
 def attrs(kvs, residual: dict | None = None, prefix: str = "attributes") -> dict:
     """KeyValue list -> {key: value}. A repeated key keeps its first value and the
     rest become `key#n`. Entries that are not a KeyValue object with a string
@@ -58,10 +62,10 @@ def attrs(kvs, residual: dict | None = None, prefix: str = "attributes") -> dict
     for i, kv in enumerate(kvs):
         if not isinstance(kv, dict) or not isinstance(kv.get("key"), str):
             if residual is not None:
-                residual[f"{prefix}[{i}]"] = kv
+                residual[_free(residual, f"{prefix}[{i}]")] = kv
             continue
         if residual is not None and kv.keys() - {"key", "value"}:
-            residual[f"{prefix}[{i}]"] = kv  # extra members of the KeyValue stay visible
+            residual[_free(residual, f"{prefix}[{i}]")] = kv  # extra members of the KeyValue stay visible
         k = kv["key"]
         out[dup_key(out, k) if k in out else k] = any_value(kv.get("value"))
     return out

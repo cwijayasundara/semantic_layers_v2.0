@@ -37,7 +37,8 @@ class GitlogParser:
                 if key.strip().lower() == "date":
                     dates.append(val.strip())
             else:  # unknown header, or a repeat of one (first wins, rest are `key#n`)
-                residual[dup_key(residual, key) if key in residual or known else key] = val
+                taken = fields | residual | {"message": None}  # `sha`/`message` are parser-owned
+                residual[dup_key(taken, key) if key in taken or known else key] = val
             i += 1
         body = lines[i + 1:]
         if any(ln[:4] != "    " for ln in body):
