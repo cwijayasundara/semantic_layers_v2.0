@@ -5,10 +5,9 @@ actually produces for the hero scenario (seed 7), and write `<cq>.expected.json`
 
 Ruling R20: expected rows are the RIGHT answers, so they come from the
 generator itself, not from DESIGN assumptions:
-  * events: `render_events` re-run with the generator's own events rng
-    (changes with their external ids (R22), alerts, pages, incidents);
-  * chat: `chat_beats` re-run with the generator's chat rng (authored hero
-    beats with handle, time and phase);
+  * events and chat: `e2ekg.generate.run.render_unmessed`, the generator's
+    own pre-mess render (changes with their external ids (R22), alerts,
+    pages, incidents; chat beats with handle, time and phase);
   * retractions: only `apply_mess` adds them, and its rng is shared by every
     injector over every record, so re-running it costs a full generation. CQ06
     therefore reads the `chat.retraction` injections from
@@ -32,22 +31,18 @@ import argparse
 import json
 import re
 import sys
-import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
-
-import numpy as np
 
 from e2ekg.generate.hero_chat import MITIGATION
 from e2ekg.generate.mess._base import word_re
 from e2ekg.generate.mess.chat import NICKNAMES
 from e2ekg.generate.mess.identity import SLACK_ONLY
 from e2ekg.generate.people import live_channel
-from e2ekg.generate.render_chat import chat_beats
-from e2ekg.generate.render_events import external_ids, render_events
-from e2ekg.generate.run import ANSWERS_DIR
+from e2ekg.generate.render_events import external_ids
+from e2ekg.generate.run import ANSWERS_DIR, render_unmessed
 from e2ekg.generate.world import as_of_utc, mitigation_attempts
 from e2ekg.graph.shacl import cq_question
 from e2ekg.graph.uris import app_uri, change_uri
@@ -58,9 +53,6 @@ from e2ekg.scenario.topology import downstream_closure, upstream_closure
 CQ_DIR = Path(__file__).resolve().parent
 REPO = CQ_DIR.parents[1]
 DEFAULT_ANSWERS = REPO / "data" / "raw" / ANSWERS_DIR
-# generate_scenario spawns one rng per renderer from SeedSequence([seed,
-# crc32(name)]) in this order (src/e2ekg/generate/run.py).
-_RNG_ORDER = ("catalog", "metrics", "logs", "traces", "events", "chat", "mess")
 LOG_CATEGORY = {"pool_exhaustion": "pool_exhaustion", "timeouts": "timeout"}
 HELD_WITHIN = timedelta(minutes=10)     # CQ05: a revert this soon means the mitigation did not hold
 _COMMIT_APP = re.compile(r"^\[([a-z0-9][a-z0-9-]*)\]")
@@ -80,19 +72,19 @@ class GeneratorOutputMissing(RuntimeError):
 
 # --- generator truth --------------------------------------------------------
 
-def renderer_rng(name: str) -> np.random.Generator:
-    seq = np.random.SeedSequence([S.seed, zlib.crc32(S.name.encode())])
-    return np.random.default_rng(seq.spawn(len(_RNG_ORDER))[_RNG_ORDER.index(name)])
-
-
 @cache
+def unmessed():
+    """The generator's own pre-mess render of the events and chat families
+    (`render_unmessed`; both are independent of scale)."""
+    return render_unmessed(S, families=("events", "chat"))
+
+
 def events():
-    return tuple(render_events(S, DEG, renderer_rng("events")))
+    return tuple(unmessed().records["events"])
 
 
-@cache
 def beats():
-    return tuple(chat_beats(S, renderer_rng("chat")))
+    return tuple(unmessed().beats)
 
 
 @dataclass(frozen=True)

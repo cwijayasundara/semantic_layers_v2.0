@@ -235,7 +235,11 @@ def _record(b: Beat) -> RawRecord:
                      fmt="slack_jsonl", fields=f, at_utc=b.at)
 
 
+def beat_records(beats: list[Beat]) -> list[RawRecord]:
+    """The Slack records for `beats`, ordered by (channel, time)."""
+    return [_record(b) for b in sorted(beats, key=lambda b: (b.channel, b.at))]
+
+
 def render_chat(scenario: Scenario, degradations: tuple[Degradation, ...],
                 rng: np.random.Generator) -> list[RawRecord]:
-    beats = chat_beats(scenario, rng)
-    return [_record(b) for b in sorted(beats, key=lambda b: (b.channel, b.at))]
+    return beat_records(chat_beats(scenario, rng))

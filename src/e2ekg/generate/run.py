@@ -5,7 +5,7 @@ write the raw tree, and keep generator-only truth outside it (R5):
 `<out>/../_answers/<name>.manifest.json` (injections, files, counts)."""
 import json
 import zlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -13,14 +13,14 @@ import numpy as np
 from e2ekg.generate.mess import apply_mess
 from e2ekg.generate.records import RawRecord, write_source
 from e2ekg.generate.render_catalog import render_catalog
-from e2ekg.generate.render_chat import render_chat
+from e2ekg.generate.render_chat import Beat, beat_records, chat_beats
 from e2ekg.generate.render_events import external_ids, render_events
 from e2ekg.generate.render_logs import render_logs
 from e2ekg.generate.render_metrics import render_metrics
 from e2ekg.generate.render_traces import Population, render_traces
 from e2ekg.generate.world import as_of_utc
 from e2ekg.scenario.model import Scenario
-from e2ekg.scenario.propagation import propagate
+from e2ekg.scenario.propagation import Degradation, propagate
 
 ANSWERS_DIR = "_answers"
 
@@ -34,6 +34,58 @@ class GenerationManifest:
     counts: dict[str, int]
     trace_population: dict
     injections: list[dict]
+
+
+FAMILIES = ("catalog", "metrics", "logs", "traces", "events", "chat")
+# One rng per renderer, spawned from SeedSequence([seed, crc32(name)]) in this
+# order; the last one belongs to the mess and is shared by every injector.
+_RNG_ORDER = (*FAMILIES, "mess")
+
+
+@dataclass
+class RenderedScenario:
+    """Everything `generate_scenario` renders before the mess. `records` holds
+    the RawRecords per family (families not asked for are empty); `beats` is
+    the chat family before it is turned into Slack records."""
+    scenario: Scenario
+    degradations: tuple[Degradation, ...]
+    records: dict[str, list[RawRecord]]
+    beats: list[Beat]
+    population: Population
+    mess_rng: np.random.Generator = field(repr=False)
+
+    def all_records(self) -> list[RawRecord]:
+        return [r for f in FAMILIES for r in self.records[f]]
+
+
+def render_unmessed(scenario: Scenario, scale: float = 1.0,
+                    families: tuple[str, ...] = FAMILIES) -> RenderedScenario:
+    """Render the scenario's signals before `apply_mess`, with exactly the rng
+    stream each renderer gets in `generate_scenario`. `families` limits the work
+    to the named renderers (events and chat do not depend on `scale`)."""
+    degs = propagate(scenario.fault, scenario.edges, scenario.window)
+    seq = np.random.SeedSequence([scenario.seed, zlib.crc32(scenario.name.encode())])
+    rng = dict(zip(_RNG_ORDER, (np.random.default_rng(s) for s in seq.spawn(len(_RNG_ORDER))),
+                   strict=True))
+    pop = Population()
+    want = set(families)
+    recs: dict[str, list[RawRecord]] = {f: [] for f in FAMILIES}
+    beats: list[Beat] = []
+    if "catalog" in want:
+        recs["catalog"] = render_catalog(scenario, degs, rng["catalog"])
+    if "metrics" in want:
+        recs["metrics"] = render_metrics(scenario, degs, rng["metrics"], scale=scale)
+    if "logs" in want:
+        recs["logs"] = render_logs(scenario, degs, rng["logs"], scale=scale)
+    if "traces" in want:
+        recs["traces"] = render_traces(scenario, degs, rng["traces"], scale=scale,
+                                       population=pop)
+    if "events" in want:
+        recs["events"] = render_events(scenario, degs, rng["events"])
+    if "chat" in want:
+        beats = chat_beats(scenario, rng["chat"])
+        recs["chat"] = beat_records(beats)
+    return RenderedScenario(scenario, degs, recs, beats, pop, rng["mess"])
 
 
 def _counts(recs: list[RawRecord]) -> dict[str, int]:
@@ -56,18 +108,10 @@ def _check_empty(out: Path) -> None:
 def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0) -> GenerationManifest:
     out = Path(out)
     _check_empty(out)
-    degs = propagate(scenario.fault, scenario.edges, scenario.window)
-    seq = np.random.SeedSequence([scenario.seed, zlib.crc32(scenario.name.encode())])
-    r_cat, r_met, r_log, r_trc, r_evt, r_chat, r_mess = (
-        np.random.default_rng(s) for s in seq.spawn(7))
-    pop = Population()
-    recs = render_catalog(scenario, degs, r_cat)
-    recs += render_metrics(scenario, degs, r_met, scale=scale)
-    recs += render_logs(scenario, degs, r_log, scale=scale)
-    recs += render_traces(scenario, degs, r_trc, scale=scale, population=pop)
-    recs += render_events(scenario, degs, r_evt)
-    recs += render_chat(scenario, degs, r_chat)
-    messy, injections = apply_mess(recs, r_mess, scenario)
+    rendered = render_unmessed(scenario, scale)
+    pop, recs = rendered.population, rendered.all_records()
+    rendered.records = {}
+    messy, injections = apply_mess(recs, rendered.mess_rng, scenario)
     del recs
     counts = _counts(messy)
     out.mkdir(parents=True, exist_ok=True)

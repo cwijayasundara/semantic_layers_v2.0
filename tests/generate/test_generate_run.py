@@ -18,7 +18,7 @@ from helpers import (
 
 from e2ekg.cli import main
 from e2ekg.generate.hero_chat import HERO_SERVICES
-from e2ekg.generate.run import generate_scenario
+from e2ekg.generate.run import generate_scenario, render_unmessed
 from e2ekg.rawid import RawSpan
 from e2ekg.scenario.hero import hero_scenario
 
@@ -128,3 +128,15 @@ def test_cli_generates_a_variant(tmp_path):
     assert ans["answer_key"]["root_cause_change_id"] is None
     assert ans["evidence_raw_ids"] == []
     assert jsonl(tmp_path / "v-control" / "metrics" / "atlas.jsonl")
+
+
+def test_render_unmessed_matches_family_subsets_and_includes_chat_beats():
+    """The public pre-mess render: a family subset is the same as the full render's
+    (each renderer owns its rng), and chat beats come with their Slack records."""
+    s = hero_scenario()
+    full = render_unmessed(s, scale=0.05)
+    part = render_unmessed(s, scale=0.05, families=("events", "chat"))
+    assert part.records["events"] == full.records["events"] and part.records["events"]
+    assert part.records["metrics"] == [] and part.records["logs"] == []
+    assert part.beats == full.beats and len(part.records["chat"]) == len(part.beats) > 0
+    assert full.all_records()[:len(full.records["catalog"])] == full.records["catalog"]
