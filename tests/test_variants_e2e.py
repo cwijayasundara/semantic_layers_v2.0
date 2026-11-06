@@ -15,9 +15,13 @@ from e2ekg.scenario.variants import variant_scenarios
 
 FAULTS = [s.name for s in variant_scenarios() if s.name != "v-control"]
 ALL_SCENARIOS = ["hero", *FAULTS, "v-control"]
+# Each variant is generated, preprocessed and harvested twice (~65 s apiece); the default run
+# keeps the hero, the slow gate runs every scenario.
+def _scenarios(names):
+    return [n if n == "hero" else pytest.param(n, marks=pytest.mark.slow) for n in names]
 
 
-@pytest.mark.parametrize("name", ["hero", *FAULTS])
+@pytest.mark.parametrize("name", _scenarios(["hero", *FAULTS]))
 def test_variant_root_cause_top1(name, harvested):
     s = harvested(name, as_of=True)
     answers = json.loads((s.answers / f"{name}.json").read_text())
@@ -29,12 +33,13 @@ def test_variant_root_cause_top1(name, harvested):
     assert chains and chains[0].links[0].uri == str(change_uri(name, kind, external))
 
 
+@pytest.mark.slow
 def test_the_control_has_nothing_to_blame(harvested):
     s = harvested("v-control", as_of=True)
     assert correlate(*chain_inputs(s.store, s.symptom)) == []
 
 
-@pytest.mark.parametrize("name", ALL_SCENARIOS)
+@pytest.mark.parametrize("name", _scenarios(ALL_SCENARIOS))
 def test_ledgers_and_shacl(name, harvested, preprocessed):
     pp = preprocessed(name)
     cov = check_coverage(pp.raw, pp.proc)
