@@ -12,12 +12,9 @@
     kind): chat:claimKind, chat:about (the resolved app), chat:quote (the text
     span), ops:atTime and chat:postedBy of its message, prov:wasDerivedFrom the
     message.
-  * chat:retracts (core.ttl: "the claim of the message it replies to"): the
-    hypothesis the extractor linked; else, for a retraction naming an app, the
-    claims about that app on the message it replies to, of any kind. The
-    extractor links hypotheses only, but responders walk back observations too."""
-from collections import defaultdict
-
+  * chat:retracts (core.ttl): only the hypothesis the extractor linked (R33). "I don't
+    think it's X" withdraws a suspicion; it does not make an observation about X false,
+    so a walk-back with no compatible hypothesis retracts nothing."""
 from rdflib import Literal, URIRef
 from rdflib.namespace import PROV, RDF
 
@@ -90,25 +87,10 @@ class ChatEnricher(Enricher):
             if ch and r["incident_id"]:
                 incident_of.setdefault(ch, r["incident_id"])
         msg_at = {m["raw_id"]: m["ts_utc"] for m in msgs}
-        parent_of = {}
-        root_msg = {(r["channel"], r["ts_raw"]): r["raw_id"] for r in slack if not r["subtype"]}
-        for r in slack:
-            if r["thread_ts"] and r["thread_ts"] != r["ts_raw"]:
-                parent_of[r["raw_id"]] = root_msg.get((r["channel"], r["thread_ts"]))
-        on_msg: dict[str, list[dict]] = defaultdict(list)
-        for c in claims:
-            on_msg[c["raw_id"]].append(c)
         by_idx = {c["claim_idx"]: c for c in claims}
-        retracts: dict[int, list[dict]] = {}
-        for c in claims:
-            if c["kind"] != "retraction":
-                continue
-            if c["refers_to"] is not None and c["refers_to"] in by_idx:
-                retracts[c["claim_idx"]] = [by_idx[c["refers_to"]]]
-            elif c["about_app_uri"] and (p := parent_of.get(c["raw_id"])):
-                retracts[c["claim_idx"]] = [t for t in on_msg.get(p, ())
-                                            if t["about_app_uri"] == c["about_app_uri"]
-                                            and t["kind"] != "retraction"]
+        retracts = {c["claim_idx"]: [by_idx[c["refers_to"]]] for c in claims
+                    if c["kind"] == "retraction" and c["refers_to"] in by_idx
+                    and by_idx[c["refers_to"]]["kind"] == "hypothesis"}
         return {"msgs": msgs, "claims": claims, "text": {k: v["text"] for k, v in by_raw.items()},
                 "handle_of": handle_of, "incident_of": incident_of, "msg_at": msg_at,
                 "retracts": retracts}

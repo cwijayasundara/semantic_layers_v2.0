@@ -300,14 +300,27 @@ def test_chat_unclassified_rows_get_chat_unclassified():
     assert any(p == OPS.atTime and o.value == row["ts_utc"] for _, p, o in ts)
 
 
-def test_a_walk_back_retracts_the_same_app_claim_it_replies_to(harvested_hero):
-    """The extractor links retractions to hypotheses only; a reply walking back an
-    observation about the same app still retracts that claim (core.ttl convention)."""
-    rows = q(harvested_hero.store, "SELECT ?about ?target ?kind WHERE { ?r chat:claimKind/"
+def test_a_walk_back_retracts_only_a_hypothesis_about_the_same_app(harvested_hero):
+    """"X is not the cause" withdraws a suspicion, not a measurement (R33)."""
+    rows = q(harvested_hero.store, "SELECT DISTINCT ?about ?target ?isHyp WHERE { ?r chat:claimKind/"
              "skos:notation 'retraction' ; chat:about ?about ; chat:retracts ?c . "
-             "?c chat:about ?target ; chat:claimKind/skos:notation ?kind }")
+             "?c chat:about ?target . BIND(EXISTS { ?c a ops:Hypothesis } AS ?isHyp) }")
     assert rows and all(r["about"] == r["target"] for r in rows)
-    assert {r["kind"] for r in rows} >= {"hypothesis", "observation"}
+    assert {str(r["isHyp"]).lower() for r in rows} == {"true"}
+
+
+def test_a_causal_path_observation_is_never_retracted(harvested_hero):
+    """The row-ranker walk-backs reply to observations and to the lead's chain
+    "TMS slow -> ... -> the ranker deadlines"; none of the TMS evidence is withdrawn."""
+    st = harvested_hero.store
+    assert not q(st, "SELECT ?c WHERE { ?c chat:claimKind/skos:notation 'observation' . "
+                     "?r chat:retracts ?c }")
+    assert not q(st, "SELECT ?c WHERE { ?r chat:retracts ?c . ?c chat:about ?a "
+                     "FILTER(?a IN (<https://kg.local/app/application/title-metadata-svc>, "
+                     "<https://kg.local/app/application/title-batch-loader>)) }")
+    assert q(st, "ASK { ?c chat:claimKind/skos:notation 'observation' ; chat:about "
+                 "<https://kg.local/app/application/title-metadata-svc> ; chat:quote ?q "
+                 "FILTER(CONTAINS(?q, 'p99') || CONTAINS(?q, 'instance')) }")
 
 
 def test_history_patterns_and_similarity(harvested_hero):

@@ -28,7 +28,7 @@ _MITIGATE = re.compile(r"\b(roll(?:ing)? ?back|rollback|revert|bump(?:ed)?|submi
                        r"warm-up plan|holding statement)\b", re.I)
 _ROOT = re.compile(r"found it|that explains|it came from|root cause|capacity was cut|"
                    r"was changed from", re.I)
-_HYPO = re.compile(r"could this be|lines up|could the|is a scaling policy|\bmaybe\b|"
+_HYPO = re.compile(r"->|\u2192|could this be|lines up|could the|is a scaling policy|\bmaybe\b|"
                    r"lots of candidates|marking .* as the affected|\bI think\b|looks like", re.I)
 _OBS = re.compile(r"p9\d|p50|latency|errors?|logs?|traces?|cpu|regress|slow|scale-in|"
                   r"exhaust|deadline|pegged|up across|partial|didn't move|nullpointer|"

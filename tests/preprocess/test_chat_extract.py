@@ -408,3 +408,21 @@ def test_scripted_pick_takes_a_nickname_only_when_one_candidate_fits(scripted_ll
     assert pick("the ranker", ["row-ranker", "geo-worker"]) == "row-ranker"
     assert pick("the batch loader", ["title-batch-loader", "ab-allocator"]) == "title-batch-loader"
     assert pick("the gateway", ["edge-gateway", "api-gateway"]) == "none"
+
+
+def test_a_causal_chain_is_a_hypothesis_and_a_walk_back_retracts_only_its_own_leg(
+        resolver, scripted_llm):
+    """A lead's "A slow -> B pool exhausted -> row-ranker deadlines" proposes a cause. A reply
+    "I don't think it's row-ranker" withdraws that leg of the chain, not the TMS leg."""
+    df = _frame([
+        ("5000.000001", None, "so far: TMS slow -> title-metadata-svc pool exhausted -> "
+                              "row-ranker deadlines -> homepage-graphql partial responses. "
+                              "what made TMS slow?"),
+        ("5001.000001", "5000.000001", "scratch that, I don't think it's row-ranker after all"),
+    ])
+    _, claims = extract_chat(df, resolver, scripted_llm)
+    chain = claims.filter(pl.col("raw_id") == df["raw_id"][0])
+    assert set(chain["kind"]) == {"hypothesis"}
+    (r,) = claims.filter(pl.col("kind") == "retraction").to_dicts()
+    target = claims.filter(pl.col("claim_idx") == r["refers_to"]).row(0, named=True)
+    assert target["kind"] == "hypothesis" and target["about_app_uri"] == app_uri("row-ranker")
