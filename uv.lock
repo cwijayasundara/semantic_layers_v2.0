@@ -623,7 +623,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepagents", specifier = ">=0.7.34" },
+    { name = "deepagents", specifier = "==0.7.34" },
     { name = "drain3", specifier = ">=0.9.11" },
     { name = "duckdb", specifier = ">=2.0.0" },
     { name = "langchain-fireworks", specifier = ">=1.7.2" },
