@@ -14,13 +14,6 @@ from e2ekg.scenario.variants import variant_scenarios
 
 SCENARIOS = {s.name: s for s in (hero_scenario(), *variant_scenarios()) if s.name != "v-control"}
 SHIFTS_S = (-60, -30, -1, 30)
-# v-cache-storm's deploy on title-metadata-svc lands at 20:46:00, the minute after the true
-# cascade's first onsets (TMS and TBL slow traces, floored to 20:45). Moved into 20:45 it
-# shares that minute, so on the minute grid nothing shows the cascade began first, and its
-# own warm-up log (20:46, 0.871 from the deploy) beats the config change's 5-minute first
-# hop (0.719): 0.684 vs 0.669 at -1 s. No ruled rule separates them (task-13 report, fix 1).
-_SAME_MINUTE = "herring shares the cascade's first minute; awaiting a ruling"
-KNOWN = {("v-cache-storm", "chg-dep-0001", dt): _SAME_MINUTE for dt in (-60, -30, -1)}
 
 
 def _cases():
@@ -28,8 +21,6 @@ def _cases():
         for h in s.answer_key.red_herring_change_ids:
             for dt in SHIFTS_S:
                 marks = [] if name == "hero" else [pytest.mark.slow]
-                if (name, h, dt) in KNOWN:
-                    marks.append(pytest.mark.xfail(strict=True, reason=KNOWN[(name, h, dt)]))
                 yield pytest.param(name, h, dt, marks=marks, id=f"{name}-{h}-{dt:+d}s")
 
 

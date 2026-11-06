@@ -186,6 +186,10 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
         for b in ordered:
             lineage = [min(a.at_utc, began.get(a, a.at_utc)) for a, _ in causes.get(b, ())
                        if a.type not in CHANGE_TYPES and a in rooted]
+            if b.type in TELEMETRY:                # one condition developing began with its first onset
+                lineage += [began.get(x, x.at_utc) for x in rooted
+                            if (x.type, x.app) == (b.type, b.app) and x.at_utc < b.at_utc
+                            and (b.at_utc - x.at_utc).total_seconds() <= WINDOW_S]
             if lineage:
                 began[b] = min(lineage)
                 causes[b] = [(a, s) for a, s in causes[b]
@@ -194,6 +198,34 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
             if b.type in CHANGE_TYPES or any(a in rooted for a, _ in causes.get(b, ())):
                 rooted.add(b)
     return causes
+
+
+def _closure(start: Iterable[Signal], step) -> set[Signal]:
+    seen, todo = set(start), list(start)
+    while todo:
+        for y in step(todo.pop()):
+            if y not in seen:
+                seen.add(y)
+                todo.append(y)
+    return seen
+
+
+def _late_roots(causes: Mapping[Signal, list[tuple[Signal, float]]], symptom: Signal) -> set[Signal]:
+    """Roots that miss an origin of the symptom's cascade which an earlier root seeded and
+    which they precede. An origin is a rooted telemetry onset in the symptom's ancestry with
+    no telemetry cause; a later change must account for the cascade it lands in."""
+    effects: dict[Signal, list[Signal]] = defaultdict(list)
+    for b, cs in causes.items():
+        for a, _ in cs:
+            effects[a].append(b)
+    ancestry = _closure([symptom], lambda b: (a for a, _ in causes.get(b, ())))
+    roots = [r for r in ancestry if r.type in CHANGE_TYPES and r not in causes]
+    reach = {r: _closure([r], effects.__getitem__) for r in roots}
+    origins = [o for o in ancestry if o.type in TELEMETRY and any(o in reach[r] for r in roots)
+               and not any(a.type in TELEMETRY for a, _ in causes[o])]
+    return {r for r in roots for o in origins
+            if precedes(r, o) and o not in reach[r]
+            and any(q.at_utc < r.at_utc and o in reach[q] for q in roots)}
 
 
 def _gm(log_scores: tuple[float, ...]) -> float:
@@ -209,6 +241,7 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
     if symptom is None:
         return []
     causes = candidate_links(signals, edges, gate, priors, topology_gate, explain_away)
+    late = _late_roots(causes, symptom) if (gate if explain_away is None else explain_away) else set()
     to_root: dict[Signal, float] = {}         # fewest links back to a root change
     for b in sorted(set(signals), key=_order):
         if b not in causes:
@@ -226,7 +259,7 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
                 if c.confidence > best.get(links[0].uri, Chain((), -1.0)).confidence:
                     best[links[0].uri] = c
             grown += [((a, *links), (log(s), *logs)) for a, s in preds
-                      if len(links) + 1 + to_root[a] <= MAX_LENGTH]
+                      if a not in late and len(links) + 1 + to_root[a] <= MAX_LENGTH]
         head: dict[Signal, tuple] = {}             # same head, same length: the best dominates
         for x in grown:
             if x[0][0] not in head or sum(x[1]) > sum(head[x[0][0]][1]):

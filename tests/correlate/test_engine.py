@@ -300,7 +300,6 @@ def test_chains_run_from_a_source_one_per_root_ranked_and_cut_at_the_threshold()
          * pair_score(lat, alert, 0.9) * pair_score(alert, inc, 0.95)) ** 0.25)
 
 
-@pytest.mark.xfail(strict=True, reason="R46: no ruled candidate rejects it (task-13 report, R46)")
 def test_a_change_landing_inside_a_condition_already_under_way_roots_no_chain():
     # v-bad-deploy at 0.5 scale (full scale ranks the experiment second at 0.622): the
     # deploy's lolomo errors begin at 17:30; the experiment lands at 17:33 on the
@@ -321,3 +320,22 @@ def test_a_change_landing_inside_a_condition_already_under_way_roots_no_chain():
         sig("inc", "incident", "edge", 24.5, opened_by=("alert",)),
     ]
     assert [c.links[0].uri for c in correlate(signals, edges, "urn:inc")] == ["urn:dep"]
+
+
+def test_a_change_that_misses_the_origin_of_a_cascade_already_seeded_roots_no_chain():
+    # v-hot-partition: the deploy's own warm-up reaches the edge on a stronger first hop,
+    # but the config change seeded the cascade's origin, which the deploy precedes and
+    # cannot reach. The config is not asked to explain the later deploy's own blip.
+    signals = [
+        sig("cfg", "config_change", "svc", 0),
+        sig("lat", "metric_anomaly", "svc", 5),
+        sig("dep", "deployment", "other", 4),
+        sig("blip", "log_error", "other", 4),
+        sig("mid", "metric_anomaly", "mid", 7),
+        sig("edge", "metric_anomaly", "edge", 9),
+        sig("alert", "alert", "edge", 12),
+        sig("inc", "incident", "edge", 14, opened_by=("alert",)),
+    ]
+    assert [c.links[0].uri for c in correlate(signals, EDGES, "urn:inc")] == ["urn:cfg"]
+    assert "urn:dep" in {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc",
+                                                          explain_away=False)}
