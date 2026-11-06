@@ -31,7 +31,7 @@ JSON_FMTS = frozenset({"json", "atlas_jsonl", "otlp_jsonl", "zipkin_jsonl", "spi
                        "asg_jsonl", "radar_jsonl", "pagerduty_jsonl", "incident_jsonl",
                        "slack_jsonl"})
 AB_COLUMNS = ("ts", "experiment", "cell", "old_allocation_pct", "new_allocation_pct",
-              "population", "app", "actor")
+              "population", "app", "actor", "allocation_id")
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _MON = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")

@@ -15,7 +15,7 @@ from e2ekg.rawid import raw_id
 SOURCES = ("catalog", "atlas", "prom", "logs", "traces", "events", "chat")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RawRecord:
     source: str
     rel_path: str

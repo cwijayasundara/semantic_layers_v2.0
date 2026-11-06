@@ -218,3 +218,17 @@ def build_hero_fixture_records() -> list[RawRecord]:
 def hero_fixture_records():
     """Returns the builder so tests read `hero_fixture_records()` like the brief."""
     return build_hero_fixture_records
+
+
+FIXTURE_SCALE = 0.05
+
+
+@pytest.fixture(scope="session")
+def generated_hero(tmp_path_factory):
+    """The hero raw tree at scale 0.05 (causal-path apps and evidence are never
+    scaled, so every ratio/behaviour holds; only the background is thinner)."""
+    from e2ekg.generate.run import generate_scenario
+    from e2ekg.scenario.hero import hero_scenario
+    out = tmp_path_factory.mktemp("raw") / "hero"
+    generate_scenario(hero_scenario(), out, scale=FIXTURE_SCALE)
+    return out
