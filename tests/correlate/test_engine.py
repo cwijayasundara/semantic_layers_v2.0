@@ -339,3 +339,26 @@ def test_a_change_that_misses_the_origin_of_a_cascade_already_seeded_roots_no_ch
     assert [c.links[0].uri for c in correlate(signals, EDGES, "urn:inc")] == ["urn:cfg"]
     assert "urn:dep" in {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc",
                                                           explain_away=False)}
+
+
+def test_a_chain_under_the_cut_is_returned_when_the_cut_is_lowered():
+    cfg = sig("cfg", "config_change", "svc", 0)
+    lat = sig("lat", "metric_anomaly", "svc", 4, sev=0.0)
+    alert = sig("alert", "alert", "edge", 9, sev=0.0)
+    inc = sig("inc", "incident", "edge", 9.5, opened_by=("alert",))
+    signals = [cfg, lat, alert, inc]
+    assert correlate(signals, EDGES, "urn:inc") == []
+    (weak,) = correlate(signals, EDGES, "urn:inc", min_confidence=0.0)
+    assert weak.links[0] is cfg and weak.confidence < 0.6
+
+
+def test_a_wider_beam_finds_the_roots_a_narrow_one_drops():
+    kinds = ("deployment", "config_change", "commit", "experiment")
+    roots = [sig(f"r{i}", kinds[i % 4], "svc", -0.1 * i) for i in range(4)]
+    alert = sig("alert", "alert", "edge", 8)
+    inc = sig("inc", "incident", "edge", 8.5, opened_by=("alert",))
+    mids = [sig(f"m{i}", "metric_anomaly", "svc", 1 + 0.01 * i, sev=1 - 0.05 * i) for i in range(4)]
+    signals = [*roots, *mids, alert, inc]
+    narrow = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=1)}
+    wide = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=80)}
+    assert narrow < wide and len(wide) == 4

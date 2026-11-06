@@ -33,7 +33,8 @@ best chain per root is kept, those under MIN_CONFIDENCE are dropped, and the res
 are ranked by confidence, then by earliest root.
 
 The two gates switch independently (R43, `topology_gate`, `explain_away`); the brief's
-`gate` sets both and either switch overrides it."""
+`gate` sets both and either switch overrides it. `beam_width` and `min_confidence` default
+to the product's; the eval ablations widen the beam and lower the cut to rank every root."""
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -235,6 +236,7 @@ def _gm(log_scores: tuple[float, ...]) -> float:
 def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], symptom_uri: str,
               gate: bool = True, priors: Mapping[tuple[str, str], float] = PRIORS,
               topology_gate: bool | None = None, explain_away: bool | None = None,
+              beam_width: int = BEAM_WIDTH, min_confidence: float = MIN_CONFIDENCE,
               ) -> list[Chain]:
     signals = list(signals)
     symptom = next((s for s in signals if s.uri == symptom_uri), None)
@@ -265,8 +267,8 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
             if x[0][0] not in head or sum(x[1]) > sum(head[x[0][0]][1]):
                 head[x[0][0]] = x
         beam = sorted(head.values(),
-                      key=lambda x: (-_gm(x[1]), [s.uri for s in x[0]]))[:BEAM_WIDTH]
-    chains = [c for c in best.values() if c.confidence >= MIN_CONFIDENCE]
+                      key=lambda x: (-_gm(x[1]), [s.uri for s in x[0]]))[:beam_width]
+    chains = [c for c in best.values() if c.confidence >= min_confidence]
     return sorted(chains, key=lambda c: (-c.confidence, c.links[0].at_utc, c.links[0].uri))
 
 
