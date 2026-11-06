@@ -30,14 +30,20 @@
 #     ops:atTime = its triggered time.
 #   * An incident's current ops:affects is the latest affected service;
 #     superseded values move to inc:previouslyAffected (correction history).
-#     ops:atTime of an incident is its creation time.
+#     ops:atTime of an incident is its creation time. Each incident.io record is
+#     also an inc:IncidentVersion (harvest extension) with its own ops:atTime, so
+#     the incident as known at t is its latest version at or before t.
 #   * A chat hypothesis is typed both ops:Claim and ops:Hypothesis; an
 #     ops:Hypothesis without ops:Claim is machine-made (RCA agent). A retraction
 #     claim ("scratch that, I don't think it's X") has chat:claimKind retraction,
 #     chat:about X and chat:retracts the claim of the message it replies to.
 #   * Investigations run AS OF a cutoff (R21: alert + 30 min; hero 16:00 PT =
-#     2026-10-14T23:00:00Z). The graph holds the whole window; investigator
-#     questions filter by the cutoff themselves (see ontology/cq/).
+#     2026-10-14T23:00:00Z). The live RCA reads the as-of store (`e2ekg harvest
+#     --as-of`, R34), which holds only what was observable at the cutoff:
+#     earlier records, fingerprints recomputed over them, incidents as their
+#     latest earlier version. The full store holds the whole window for the CQs,
+#     history and the flywheel; questions over it filter by the cutoff
+#     themselves (see ontology/cq/).
 #
 # Signal types (ontology/schemes/signal_type.ttl, the post's 13) and the class an
 # enricher emits for each. Each class states its type(s) with ops:signalType.

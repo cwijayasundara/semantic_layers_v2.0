@@ -292,7 +292,7 @@ def test_traces_edges_cover_every_span(harvested_hero, preprocessed_hero):
 
 
 def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
-    """(fingerprint nodes checked, {node: (ops:count, rows its selectors select)} where they differ)."""
+    """(nodes checked, {node: (ops:count, rows its selectors select)} where the two differ)."""
     rows = q(store, "SELECT ?x ?sel ?n WHERE { ?x a ?c ; ops:rawSelector ?sel ; ops:count ?n "
                     "VALUES ?c { ops:LogSpike ops:MetricSeries trc:TraceEdge "
                     "ops:TraceEdgeFingerprint ops:LogPattern } "
@@ -350,7 +350,8 @@ def test_edge_statements_cite_their_sources(harvested_hero):
         prov:wasDerivedFrom ?e . ?e a trc:TraceEdge ; trc:caller ?a ; ops:onApplication ?b }""")
     # the open incident's similarity comes from the change that matched a past cause
     assert q(st, """ASK { ?live inc:incidentId 'INC-5377' . ?s rdf:subject ?live ;
-        rdf:predicate ops:similarTo ; prov:wasDerivedFrom ?c . ?c a/rdfs:subClassOf* ops:Change }""")
+        rdf:predicate ops:similarTo ; prov:wasDerivedFrom ?c .
+        ?c a/rdfs:subClassOf* ops:Change }""")
 
 
 def test_alerts_pages_incidents(harvested_hero):

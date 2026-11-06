@@ -28,9 +28,9 @@ Choices:
     is replaced by the whole message.
   * Edit events (`message_changed`) are messages of their own, linked to the original
     through `edited_from_raw_id`; both versions are extracted.
-  * Extraction covers every message, before and after the RCA cutoff; as_of filtering
-    happens at query time (R21). Slack `ts` stays a string (`ts`) and `ts_utc` keeps
-    microseconds."""
+  * Extraction covers every message, before and after the RCA cutoff; as_of
+    filtering happens when the as-of store is harvested (R34). Slack `ts` stays a
+    string (`ts`) and `ts_utc` keeps microseconds."""
 import json
 from collections import defaultdict
 from typing import Literal

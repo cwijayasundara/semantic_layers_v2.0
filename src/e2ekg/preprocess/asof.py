@@ -55,8 +55,8 @@ def _path(proc: Path, name: str) -> Path:
     return Path(proc) / f"{name}.parquet"
 
 
-def _timed(name: str, col: str = "ts_utc") -> Callable[[Path, datetime], pl.LazyFrame]:
-    return lambda proc, t: pl.scan_parquet(_path(proc, name)).filter(pl.col(col) < t)
+def _timed(name: str) -> Callable[[Path, datetime], pl.LazyFrame]:
+    return lambda proc, t: pl.scan_parquet(_path(proc, name)).filter(pl.col("ts_utc") < t)
 
 
 def _whole(name: str) -> Callable[[Path, datetime], pl.LazyFrame]:

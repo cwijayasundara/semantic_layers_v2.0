@@ -14,8 +14,10 @@ written by alerts_incidents, changes and topology.
     a past cause that recurs where this incident can be caused. Each link's
     rdf:Statement is prov:wasDerivedFrom both incidents (their postmortems give
     the shape) and, for an open incident, the change that matched it.
-The live incident's current affected service may be a correction made after
-the RCA cutoff (R21), so its similarity is a whole-window fact."""
+In the full store the live incident's affected service may be a correction made
+after the RCA cutoff (R21), so its similarity there is a whole-window fact. The
+as-of store (R34) holds the incident as known at the cutoff, so its similarity
+is computed from that version."""
 from collections import defaultdict
 from datetime import datetime, timedelta
 

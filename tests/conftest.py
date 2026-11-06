@@ -2,8 +2,8 @@
 
 Session fixtures: a scale-0.05 hero raw tree preprocessed once with the
 scripted LLM (so the chat tables exist), and that tree harvested once into an
-on-disk Oxigraph store, plus an as-of store of the same tree. The generator builds the fixture (tests may use it);
-the pipeline under test never imports `e2ekg.generate` (R6). Tests may read
+on-disk Oxigraph store, plus an as-of store of the same tree (R34). The
+generator builds the fixture (tests may use it); the pipeline under test never imports `e2ekg.generate` (R6). Tests may read
 `_answers/` (the oracle), the pipeline may not (R5)."""
 from dataclasses import dataclass
 from pathlib import Path
