@@ -19,7 +19,9 @@ Provenance (core.ttl header): a node built from raw records (changes, alerts,
 pages, incidents, messages, catalog apps) carries one `ops:rawSelector` per raw
 record id (source|rel_path|offset|length|sha); a fingerprint carries the JSON
 selector of `e2ekg.preprocess.selector` (it starts with "{"). Nodes built from
-other nodes (claims, patterns) use prov:wasDerivedFrom."""
+other nodes (claims, patterns) use prov:wasDerivedFrom. A derived edge
+(ops:dependsOn, ops:similarTo) gets an rdf:Statement that carries its
+provenance the same way (`edge`)."""
 import hashlib
 import json
 import re
@@ -155,18 +157,35 @@ def string(s: str) -> Literal:
     return Literal(s, datatype=XSD.string)
 
 
-def person(handle: str) -> tuple[URIRef, list[Triple]]:
+def person(handle: str, raw_ids: Iterable[str] = ()) -> tuple[URIRef, list[Triple]]:
+    """The Person node of a handle, citing the raw records that name it."""
     p = person_uri(handle)
-    return p, [(p, RDF.type, OPS.Person), (p, TEAM.handle, string(handle))]
+    return p, [(p, RDF.type, OPS.Person), (p, TEAM.handle, string(handle)),
+               *raw_selectors(p, raw_ids)]
 
 
 def raw_selectors(s: URIRef, raw_ids: Iterable[str]) -> list[Triple]:
     return [(s, OPS.rawSelector, string(r)) for r in sorted(set(raw_ids)) if r]
 
 
+def edge(scenario: str, s: URIRef, p: URIRef, o: URIRef, raw_ids: Iterable[str] = (),
+         derived_from: Iterable[URIRef] = ()) -> Iterable[Triple]:
+    """The triple (s, p, o) plus an rdf:Statement about it that carries its provenance:
+    an edge is not a node, so its raw records and source nodes hang on its statement."""
+    u = node("ops", "statement", scenario, s, p, o)
+    yield s, p, o
+    yield u, RDF.type, RDF.Statement
+    yield u, RDF.subject, s
+    yield u, RDF.predicate, p
+    yield u, RDF.object, o
+    yield from raw_selectors(u, raw_ids)
+    for x in sorted(set(derived_from)):
+        yield u, PROV.wasDerivedFrom, x
+
+
 def label(s: URIRef, text: str) -> Triple:
     return s, RDFS.label, Literal(text)
 
 
-__all__ = ["Enricher", "EnrichmentResult", "HarvestContext", "dec", "h", "integer", "label",
+__all__ = ["Enricher", "EnrichmentResult", "HarvestContext", "dec", "edge", "h", "integer", "label",
            "node", "person", "raw_selectors", "recovered", "string", "ts"]

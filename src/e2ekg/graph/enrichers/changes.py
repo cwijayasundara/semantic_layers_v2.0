@@ -18,6 +18,7 @@ Conventions (core.ttl header; CQ02/05/10/15 rely on them):
 Who made the change (triggered_by / user / actor, when it is a person handle)
 is prov:wasAssociatedWith an ops:Person."""
 import re
+from collections import defaultdict
 
 from rdflib.namespace import RDF
 
@@ -75,13 +76,13 @@ class ChangesEnricher(Enricher):
                 continue
             c = changes.setdefault((kind, str(ext)), {
                 "kind": kind, "id": str(ext), "raw_ids": [], "at": None, "status": None,
-                "app": None, "who": set(), "fields": {}})
+                "app": None, "who": defaultdict(list), "fields": {}})
             c["raw_ids"].append(r["raw_id"])
             if kind == "experiment_allocation":
                 c["raw_ids"] += headers
             for k in ("triggered_by", "user", "actor"):
                 if isinstance(f.get(k), str) and _HANDLE.match(f[k]):
-                    c["who"].add(f[k])
+                    c["who"][f[k]].append(r["raw_id"])
             if kind == "commit":
                 m = _COMMIT_APP.match(f.get("message") or "")
                 c["app"] = prefix_app.get(m.group(1)) if m else None
@@ -111,7 +112,7 @@ class ChangesEnricher(Enricher):
             if c["status"]:
                 yield s, CHG.status, string(str(c["status"]))
             for h in sorted(c["who"]):
-                p, pt = person(h)
+                p, pt = person(h, c["who"][h])
                 yield s, PROV.wasAssociatedWith, p
                 yield from pt
             yield from _details(s, c["kind"], f)

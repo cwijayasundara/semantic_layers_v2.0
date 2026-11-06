@@ -3,9 +3,12 @@
 One ops:Application per catalog id, with ops:inCatalog true, rdfs:label (the
 id), ops:appKind, ops:tier, ops:ownedBy (team node labelled with the catalog
 owner name) and ops:deployedIn (region nodes labelled with the region name).
-Each application cites the catalog record(s) it came from (ops:rawSelector).
+Each application cites the catalog record(s) it came from (ops:rawSelector), and
+each team and region the records of the applications that name it.
 Duplicate records of one id are merged:
 first non-empty value wins, every raw id is kept."""
+from collections import defaultdict
+
 from rdflib import Literal
 from rdflib.namespace import RDF
 
@@ -42,9 +45,21 @@ class CatalogEnricher(Enricher):
             for reg in f.get("regions") or ():
                 if isinstance(reg, str) and reg and reg not in a["regions"]:
                     a["regions"].append(reg)
-        return [apps[k] for k in sorted(apps)]
+        teams, regions = defaultdict(list), defaultdict(list)
+        for a in apps.values():
+            if a["team"]:
+                teams[a["team"]] += a["raw_ids"]
+            for reg in a["regions"]:
+                regions[reg] += a["raw_ids"]
+        return [apps[k] for k in sorted(apps)], teams, regions
 
-    def emit(self, apps):
+    def emit(self, result):
+        apps, teams, regions = result
+        for names, uri_of, cls in ((teams, team_uri, OPS.Team), (regions, region_uri, OPS.Region)):
+            for name, raw_ids in sorted(names.items()):
+                yield uri_of(name), RDF.type, cls
+                yield label(uri_of(name), name)
+                yield from raw_selectors(uri_of(name), raw_ids)
         for a in apps:
             s = app_uri(a["id"])
             yield s, RDF.type, OPS.Application
@@ -55,13 +70,7 @@ class CatalogEnricher(Enricher):
             if a["tier"] is not None:
                 yield s, OPS.tier, integer(a["tier"])
             if a["team"]:
-                t = team_uri(a["team"])
-                yield s, OPS.ownedBy, t
-                yield t, RDF.type, OPS.Team
-                yield label(t, a["team"])
+                yield s, OPS.ownedBy, team_uri(a["team"])
             for reg in a["regions"]:
-                r = region_uri(reg)
-                yield s, OPS.deployedIn, r
-                yield r, RDF.type, OPS.Region
-                yield label(r, reg)
+                yield s, OPS.deployedIn, region_uri(reg)
             yield from raw_selectors(s, a["raw_ids"])

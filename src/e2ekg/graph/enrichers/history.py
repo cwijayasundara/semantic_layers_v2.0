@@ -11,7 +11,9 @@ written by alerts_incidents, changes and topology.
     cause shape (cause kind, cause app). An unresolved incident (still open) takes
     its candidate shapes from the changes in the LOOKBACK before it opened on
     its current affected apps and their dependency closure (ops:dependsOn+):
-    a past cause that recurs where this incident can be caused.
+    a past cause that recurs where this incident can be caused. Each link's
+    rdf:Statement is prov:wasDerivedFrom both incidents (their postmortems give
+    the shape) and, for an open incident, the change that matched it.
 The live incident's current affected service may be a correction made after
 the RCA cutoff (R21), so its similarity is a whole-window fact."""
 from collections import defaultdict
@@ -20,7 +22,7 @@ from datetime import datetime, timedelta
 from rdflib import Literal, URIRef
 from rdflib.namespace import PROV, RDF, RDFS
 
-from e2ekg.graph.enricher import NS, Enricher, dec, integer, node
+from e2ekg.graph.enricher import NS, Enricher, dec, edge, integer, node
 from e2ekg.graph.uris import concept
 
 OPS = NS["ops"]
@@ -44,7 +46,7 @@ class HistoryEnricher(Enricher):
             OPTIONAL { ?i ops:resolvedBy ?by }
             OPTIONAL { ?i ops:causeKind/skos:notation ?kind ; ops:causeApp ?cause } }""")
         affects = q(_PFX + "SELECT ?i ?a WHERE { ?i a ops:Incident ; ops:affects ?a }")
-        changes = q(_PFX + """SELECT ?kind ?app ?t WHERE {
+        changes = q(_PFX + """SELECT ?c ?kind ?app ?t WHERE {
             ?c a/rdfs:subClassOf* ops:Change ; ops:changeKind/skos:notation ?kind ;
                ops:changedApp ?app ; ops:atTime ?t }""")
         edges = q(_PFX + "SELECT ?a ?b WHERE { ?a ops:dependsOn ?b }")
@@ -77,9 +79,11 @@ class HistoryEnricher(Enricher):
         for i, x in resolved.items():
             if x["kind"]:
                 shapes[(x["kind"], x["cause"])].add(i)
-        similar = set()
+        similar = defaultdict(set)          # (a, b) -> the nodes the link is derived from
         for ids in shapes.values():
-            similar |= {(a, b) for a in ids for b in ids if a != b}
+            for a in ids:
+                for b in ids - {a}:
+                    similar[(a, b)] |= {a, b}
         for i, x in inc.items():
             if i in resolved:
                 continue
@@ -88,8 +92,9 @@ class HistoryEnricher(Enricher):
                 t = datetime.fromisoformat(c["t"])
                 if c["app"] in reach and x["t"] - LOOKBACK <= t <= x["t"]:
                     for j in shapes.get((c["kind"], c["app"]), ()):
-                        similar |= {(i, j), (j, i)}
-        return patterns, sorted(similar)
+                        similar[(i, j)] |= {i, j, c["c"]}
+                        similar[(j, i)] |= {i, j, c["c"]}
+        return patterns, sorted(similar.items())
 
     def emit(self, result):
         patterns, similar = result
@@ -104,8 +109,9 @@ class HistoryEnricher(Enricher):
             yield u, OPS.frequency, dec(round(p["frequency"], 6))
             for i in p["incidents"]:
                 yield u, PROV.wasDerivedFrom, URIRef(i)
-        for a, b in similar:
-            yield URIRef(a), OPS.similarTo, URIRef(b)
+        for (a, b), sources in similar:
+            yield from edge(self.scenario, URIRef(a), OPS.similarTo, URIRef(b),
+                            derived_from=[URIRef(x) for x in sources])
 
 
 def _closure(start: set[str], down: dict[str, set[str]]) -> set[str]:

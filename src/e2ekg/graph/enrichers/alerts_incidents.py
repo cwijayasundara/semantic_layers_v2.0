@@ -79,7 +79,9 @@ class AlertsIncidentsEnricher(Enricher):
         for pid, d in sorted(first_by_id(pages, "page_id", "status", "triggered").items()):
             who = next((json_fields(r["fields"]).get("assignee") for r in d["rows"]
                         if json_fields(r["fields"]).get("assignee")), None)
-            out_pages.append({"id": pid, "app": _app_of(d["rows"]), "who": who, **d})
+            out_pages.append({"id": pid, "app": _app_of(d["rows"]), "who": who, **d,
+                              "who_ids": [r["raw_id"] for r in d["rows"]
+                                          if json_fields(r["fields"]).get("assignee") == who]})
         out_inc = []
         for iid, d in sorted(first_by_id(incidents, "incident_id", "event",
                                          "incident.created").items()):
@@ -98,7 +100,7 @@ class AlertsIncidentsEnricher(Enricher):
             yield u, RDF.type, OPS.Page
             yield from _common(u, p)
             if p["who"]:
-                who, pt = person(p["who"])
+                who, pt = person(p["who"], p["who_ids"])
                 yield u, OPS.assignedTo, who
                 yield from pt
         for i in incidents:
@@ -116,7 +118,7 @@ class AlertsIncidentsEnricher(Enricher):
             if i["corrected"] is not None:
                 yield u, INC.correctedAt, ts(i["corrected"])
             if i["resolved_by"]:
-                who, pt = person(i["resolved_by"])
+                who, pt = person(i["resolved_by"], i["resolved_ids"])
                 yield u, OPS.resolvedBy, who
                 yield from pt
             if i["cause_kind"]:
@@ -156,13 +158,14 @@ def _incident(rows: list[dict], apps: dict[str, str | None]) -> dict:
     previous = list(dict.fromkeys(a for _, xs in lists for a in xs if a not in current))
     corrected = next((r["ts_utc"] for r, xs in lists if set(xs) == set(current)), None) \
         if previous else None
-    resolved = next((f for r, f in zip(rows, fields, strict=True)
-                     if r["event"] == "incident.resolved"), {})
+    resolved, resolved_ids = next(((f, [r["raw_id"]]) for r, f in zip(rows, fields, strict=True)
+                                   if r["event"] == "incident.resolved"), ({}, []))
     pm = resolved.get("postmortem") if isinstance(resolved.get("postmortem"), dict) else {}
     kind = pm.get("contributing_change_kind")
     cause = pm.get("contributing_service")
     return {"severity": sev, "versions": versions, "current": current, "previous": previous,
             "corrected": corrected, "resolved_by": resolved.get("resolved_by"),
+            "resolved_ids": resolved_ids,
             "cause_kind": kind if kind in CHANGE_KINDS else None,
             "cause_app": apps.get(cause) if cause else None}
 

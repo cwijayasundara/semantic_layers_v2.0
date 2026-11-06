@@ -12,12 +12,16 @@ Cap: at most 50 edges per node per direction (global constraint). Edges are
 ranked by call volume (descending; catalog-only edges have volume 0), ties by
 (caller, callee), and accepted greedily while both endpoints are under the cap.
 Every dropped edge counts against both endpoints, recorded as
-`ops:droppedEdges n` on the application (only when n > 0)."""
-from collections import Counter
+`ops:droppedEdges n` on the application (only when n > 0).
+
+Provenance: each kept edge's rdf:Statement cites the catalog records that list
+the dependency (ops:rawSelector) and, for a traced edge, prov:wasDerivedFrom
+the trc:TraceEdge of that caller and callee."""
+from collections import Counter, defaultdict
 
 import polars as pl
 
-from e2ekg.graph.enricher import NS, Enricher, integer, json_fields, read_table
+from e2ekg.graph.enricher import NS, Enricher, edge, integer, json_fields, node, read_table
 from e2ekg.graph.uris import app_uri
 from e2ekg.preprocess.identity import APP_URI_PREFIX
 
@@ -54,9 +58,9 @@ class TopologyEnricher(Enricher):
 
     def fetch(self, ctx):
         cat = read_table(ctx, "catalog", ["raw_id", "fields"]).sort("raw_id")
-        apps, catalog = set(), set()
-        deps: list[tuple[str, str]] = []
-        for f in cat["fields"]:
+        apps, catalog = set(), defaultdict(list)
+        deps: list[tuple[str, str, str]] = []
+        for rid, f in cat.iter_rows():
             d = json_fields(f)
             if not d.get("id"):
                 continue
@@ -64,11 +68,11 @@ class TopologyEnricher(Enricher):
             for dep in d.get("dependencies") or ():
                 name = dep.get("app") if isinstance(dep, dict) else dep
                 if isinstance(name, str) and name:
-                    deps.append((d["id"], name))
-        for a, name in deps:
+                    deps.append((d["id"], name, rid))
+        for a, name, rid in deps:
             b = name if name in apps else ctx.resolver.resolve(name).app
             if b in apps:
-                catalog.add((a, b))
+                catalog[(a, b)].append(rid)
         e = read_table(ctx, "derived/fp_edges", ["caller_uri", "callee_uri", "n"])
         vol = (e.filter(pl.col("caller_uri").is_not_null() & pl.col("callee_uri").is_not_null()
                         & (pl.col("caller_uri") != pl.col("callee_uri")))
@@ -82,11 +86,16 @@ class TopologyEnricher(Enricher):
 
     def analyze(self, raw):
         catalog, traces = raw
-        return merge_edges(catalog, traces, CAP)
+        kept, dropped = merge_edges(set(catalog), traces, CAP)
+        return kept, dropped, catalog, set(traces)
 
     def emit(self, result):
-        kept, dropped = result
+        kept, dropped, catalog, traced = result
         for a, b in kept:
-            yield app_uri(a), OPS.dependsOn, app_uri(b)
+            yield from edge(self.scenario, app_uri(a), OPS.dependsOn, app_uri(b),
+                            raw_ids=catalog.get((a, b), ()),
+                            derived_from=[node("trc", "edge", self.scenario,
+                                               f"{app_uri(a)}>{app_uri(b)}")]
+                            if (a, b) in traced else ())
         for a, n in dropped.items():
             yield app_uri(a), OPS.droppedEdges, integer(n)

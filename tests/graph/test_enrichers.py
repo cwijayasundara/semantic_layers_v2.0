@@ -29,6 +29,7 @@ PREFIX team: <https://kg.local/team#>
 PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
 
@@ -319,6 +320,35 @@ def test_select_and_the_batch_resolvers_agree(preprocessed_hero):
     assert counts == {s: d.height for s, d in one.items()} == dict(zip(sels, fp["n"]))
     assert selected_raw_ids(preprocessed_hero.proc, sels) == {
         r for d in one.values() for r in d["raw_id"]}
+
+
+def test_every_node_carries_provenance(harvested_hero):
+    rows = q(harvested_hero.store, """SELECT DISTINCT ?c WHERE { GRAPH ?g { ?x a ?c }
+        FILTER(?g != <https://kg.local/graph/ontology> && ?c != chat:Thread)
+        FILTER NOT EXISTS { ?x ops:rawSelector|prov:wasDerivedFrom ?any } }""")
+    assert rows == []
+
+
+@pytest.mark.parametrize("p", ["ops:dependsOn", "ops:similarTo"])
+def test_every_derived_edge_has_a_statement_with_provenance(harvested_hero, p):
+    st = harvested_hero.store
+    assert q(st, f"ASK {{ ?a {p} ?b }}")
+    assert not q(st, f"""ASK {{ ?a {p} ?b FILTER NOT EXISTS {{ ?s a rdf:Statement ;
+        rdf:subject ?a ; rdf:predicate {p} ; rdf:object ?b ;
+        ops:rawSelector|prov:wasDerivedFrom ?x }} }}""")
+
+
+def test_edge_statements_cite_their_sources(harvested_hero):
+    st = harvested_hero.store
+    # a datastore dependency comes from the caller's catalog record
+    assert q(st, """ASK { ?s rdf:predicate ops:dependsOn ; rdf:subject ?a ; rdf:object ?d ;
+        ops:rawSelector ?r . ?a ops:rawSelector ?r . ?d ops:appKind 'datastore' }""")
+    # a traced dependency comes from the trace edge of that caller and callee
+    assert q(st, """ASK { ?s rdf:predicate ops:dependsOn ; rdf:subject ?a ; rdf:object ?b ;
+        prov:wasDerivedFrom ?e . ?e a trc:TraceEdge ; trc:caller ?a ; ops:onApplication ?b }""")
+    # the open incident's similarity comes from the change that matched a past cause
+    assert q(st, """ASK { ?live inc:incidentId 'INC-5377' . ?s rdf:subject ?live ;
+        rdf:predicate ops:similarTo ; prov:wasDerivedFrom ?c . ?c a/rdfs:subClassOf* ops:Change }""")
 
 
 def test_alerts_pages_incidents(harvested_hero):

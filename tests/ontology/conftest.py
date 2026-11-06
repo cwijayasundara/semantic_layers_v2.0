@@ -78,14 +78,14 @@ def build_hero_reference(d=None) -> tuple[Graph, bool]:
     apps = d.APPS
     for a in s.catalog:
         t = team_uri(a.owner_team)
-        g.add((t, RDF.type, OPS.Team))
+        b.add(t, OPS.Team)
         g.add((t, RDFS.label, Literal(a.owner_team)))
         b.add(app_uri(a.id), OPS.Application, ops__inCatalog=Literal(True),
               ops__ownedBy=t, ops__appKind=Literal(a.kind), ops__tier=Literal(a.tier),
               ops__deployedIn=[region_uri(r) for r in a.regions])
         g.add((app_uri(a.id), RDFS.label, Literal(a.id)))
         for r in a.regions:
-            g.add((region_uri(r), RDF.type, OPS.Region))
+            b.add(region_uri(r), OPS.Region)
             g.add((region_uri(r), RDFS.label, Literal(r)))
     for e in s.edges:
         g.add((app_uri(e.caller), OPS.dependsOn, app_uri(e.callee)))
@@ -100,7 +100,7 @@ def build_hero_reference(d=None) -> tuple[Graph, bool]:
 
     def person(h):
         p = person_uri(h)
-        g.add((p, RDF.type, OPS.Person))
+        b.add(p, OPS.Person)
         g.add((p, TEAM.handle, Literal(h)))
         return p
 

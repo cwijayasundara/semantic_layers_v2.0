@@ -43,7 +43,7 @@ def message_triples(scenario: str, m: dict, handle: str | None, thread=None, rev
     if m["ts_utc"] is not None:
         yield u, OPS.atTime, ts(m["ts_utc"])
     if handle:
-        p, pt = person(handle)
+        p, pt = person(handle, [m["raw_id"]])
         yield u, CHAT.postedBy, p
         yield from pt
     classified = m["status"] != "unclassified"
