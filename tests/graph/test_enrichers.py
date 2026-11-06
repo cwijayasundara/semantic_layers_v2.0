@@ -326,7 +326,7 @@ def test_select_and_the_batch_resolvers_agree(preprocessed_hero):
 
 def test_every_node_carries_provenance(harvested_hero):
     rows = q(harvested_hero.store, """SELECT DISTINCT ?c WHERE { GRAPH ?g { ?x a ?c }
-        FILTER(?g != <https://kg.local/graph/ontology> && ?c != chat:Thread)
+        FILTER(?g != <https://kg.local/graph/ontology>)
         FILTER NOT EXISTS { ?x ops:rawSelector|prov:wasDerivedFrom ?any } }""")
     assert rows == []
 

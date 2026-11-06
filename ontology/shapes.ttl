@@ -53,7 +53,7 @@ shp:ApplicationRef a sh:NodeShape ;
 shp:Derived a sh:NodeShape ;
     sh:targetClass ops:Signal, ops:Change, ops:Incident, ops:Page, ops:Message, ops:Claim,
         ops:Hypothesis, ops:Pattern, ops:CausalChain, ops:Finding, ops:Person, ops:Team,
-        ops:Region, inc:IncidentVersion, rdf:Statement ;
+        ops:Region, inc:IncidentVersion, rdf:Statement, chat:Thread ;
     sh:or (
         [ sh:path ops:rawSelector ; sh:minCount 1 ]
         [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ]
