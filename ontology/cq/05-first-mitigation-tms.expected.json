@@ -1,15 +1,15 @@
 {
-  "question": "What kind of claim is the first mitigation about title-metadata-svc during the incident, and did it come before anyone named a root cause?",
+  "question": "Who first proposed a mitigation on title-metadata-svc during the incident, when, and did it hold?",
   "vars": [
-    "kind",
-    "app",
-    "beforeRootCause"
+    "handle",
+    "at",
+    "held"
   ],
   "rows": [
     {
-      "kind": "mitigation",
-      "app": "<https://kg.local/app/application/title-metadata-svc>",
-      "beforeRootCause": "true"
+      "handle": "marco.rossi",
+      "at": "2026-10-14T23:00:30.986921Z",
+      "held": "false"
     }
   ]
 }

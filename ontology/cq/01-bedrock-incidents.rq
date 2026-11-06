@@ -1,10 +1,14 @@
 # Which incidents affected applications owned by Team Bedrock in us-east-1?
-# Incident ids exist only after rendering, so each incident is identified by
-# its affected app, severity and opening time.
+# requires: catalog, alerts_incidents
+# Incident ids are source-system ids, so each incident is identified by its
+# affected app, severity and opening time. Only the CURRENT ops:affects counts:
+# the live INC-5377 first named api-gateway (Bedrock, us-east-1) and was corrected
+# to homepage-graphql, so it is not a row (inc:previouslyAffected is ignored on purpose).
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>

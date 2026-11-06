@@ -1,8 +1,11 @@
 # What changed in the downstream dependency closure of homepage-graphql in the 40 minutes before the 15:20 PT TTR regression?
+# requires: catalog, topology, changes
+# Change URIs are built from external ids (R22).
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>

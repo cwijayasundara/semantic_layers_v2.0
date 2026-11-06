@@ -5,10 +5,49 @@
   ],
   "rows": [
     {
+      "app": "<https://kg.local/app/application/api-gateway>"
+    },
+    {
+      "app": "<https://kg.local/app/application/artwork-svc>"
+    },
+    {
       "app": "<https://kg.local/app/application/edge-gateway>"
     },
     {
+      "app": "<https://kg.local/app/application/geo-worker>"
+    },
+    {
       "app": "<https://kg.local/app/application/homepage-graphql>"
+    },
+    {
+      "app": "<https://kg.local/app/application/inbox-pipeline>"
+    },
+    {
+      "app": "<https://kg.local/app/application/ingest-router>"
+    },
+    {
+      "app": "<https://kg.local/app/application/locale-manager>"
+    },
+    {
+      "app": "<https://kg.local/app/application/media-pipeline>"
+    },
+    {
+      "app": "<https://kg.local/app/application/render-api>"
+    },
+    {
+      "app": "<https://kg.local/app/application/render-resolver>"
+    },
+    {
+      "app": "<https://kg.local/app/application/schedule-indexer-2>"
+    },
+    {
+      "app": "<https://kg.local/app/application/schedule-manager>"
+    },
+    {
+      "app": "<https://kg.local/app/application/session-router>"
+    },
+    {
+      "app": "<https://kg.local/app/application/token-router>"
     }
   ]
 }

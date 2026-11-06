@@ -1,8 +1,11 @@
 # Which experiment allocations changed inside the window on applications downstream of the live incident's affected service?
+# requires: topology, changes, alerts_incidents
+# Full window: uses the incident's current (corrected, post-as_of) affected service.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>

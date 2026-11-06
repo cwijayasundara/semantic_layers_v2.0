@@ -1,5 +1,5 @@
 {
-  "question": "How many changes of each kind happened inside the incident window?",
+  "question": "How many changes of each kind happened between the window start and the as_of cutoff?",
   "vars": [
     "kind",
     "n"
@@ -10,12 +10,16 @@
       "n": "1"
     },
     {
+      "kind": "commit",
+      "n": "6"
+    },
+    {
       "kind": "config_change",
-      "n": "4"
+      "n": "3"
     },
     {
       "kind": "deployment",
-      "n": "6"
+      "n": "5"
     },
     {
       "kind": "experiment_allocation",

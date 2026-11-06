@@ -1,8 +1,12 @@
 # Which applications had alerts fire inside the window before the live incident was opened?
+# requires: alerts_incidents
+# Before the incident opened, so before the as_of cutoff by construction.
+# Every firing counts: background noise, deploy blips and the chronic artwork-svc alert.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>

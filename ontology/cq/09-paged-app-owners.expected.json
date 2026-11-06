@@ -1,5 +1,5 @@
 {
-  "question": "Which teams own the applications that paged on-call during the incident window?",
+  "question": "Which teams own the applications that paged on-call between the window start and the as_of cutoff?",
   "vars": [
     "app",
     "team"

@@ -1,5 +1,5 @@
 {
-  "question": "Which client platforms show a metric anomaly inside the incident window?",
+  "question": "Which client platforms show a metric anomaly between the window start and the as_of cutoff?",
   "vars": [
     "app"
   ],

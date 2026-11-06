@@ -1,14 +1,18 @@
 # How was the live incident's affected service corrected, from which previous value to which current one?
+# requires: alerts_incidents
+# Post-as_of: the correction lands at 23:14Z, after the 23:00:00Z cutoff. At the
+# cutoff an investigator still sees api-gateway as the affected service.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX apps: <https://kg.local/app/application/>
-SELECT DISTINCT ?previous ?current WHERE {
-  ?incident a ops:Incident ; ops:atTime ?t ; inc:previouslyAffected ?previous ;
-            ops:affects ?current .
+SELECT DISTINCT ?incidentId ?previous ?current WHERE {
+  ?incident a ops:Incident ; inc:incidentId ?incidentId ; ops:atTime ?t ;
+            inc:previouslyAffected ?previous ; ops:affects ?current .
   FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
 }

@@ -1,16 +1,23 @@
-# Which applications were named in hypotheses that were later retracted during the incident?
+# Which applications did responders explicitly retract an earlier claim about, between the window start and the as_of cutoff?
+# requires: chat
+# as_of: investigator question, bounded by the R21 cutoff 2026-10-14T23:00:00Z.
+# The app is the one the retraction names ("scratch that, I don't think it's X");
+# the retracted claim may be any kind (the injector walks back observations too).
+# Rows come from the generation's chat.retraction injections (see derived_from).
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX apps: <https://kg.local/app/application/>
 SELECT DISTINCT ?app WHERE {
-  ?retraction chat:retracts ?h ; ops:atTime ?rt .
-  ?h a ops:Hypothesis ; chat:about ?app ; ops:atTime ?ht .
+  ?r a ops:Claim ; chat:claimKind/skos:notation "retraction" ; chat:retracts ?claim ;
+     chat:about ?app ; ops:atTime ?rt .
   ?app a ops:Application .
-  FILTER(?ht >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?ht < "2026-10-15T01:00:00Z"^^xsd:dateTime)
-  FILTER(?rt >= ?ht)
+  ?claim ops:atTime ?ct .
+  FILTER(?rt >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?rt < "2026-10-14T23:00:00Z"^^xsd:dateTime)
+  FILTER(?ct <= ?rt)
 }

@@ -9,9 +9,15 @@ Choices:
   * Teams: `team/team/<slug of the catalog owner name>`; the name itself is the
     node's rdfs:label ("Team Bedrock" -> team-bedrock).
   * People: `team/person/<handle>`. Regions: `infra/region/<region>`.
-  * Changes: change ids are only unique within a scenario, so a change is
-    `chg/<change kind>/<scenario>/<change id>`; the kind segment makes the
-    URI self-describing and is checked against the change kind scheme.
+  * Changes: `chg/<change kind>/<scenario>/<external id>`. The external id is
+    the opaque id the change carries in its own system (R22): Spinnaker
+    execution id, fast-property change id, ASG activity id, A/B allocation id
+    or git sha. It is the only change id the raw tree (and so the graph) ever
+    sees; scenario change ids such as chg-cfg-0001 stay in the answer key and
+    are mapped through `_answers/<name>.json` `external_ids` (external ->
+    scenario id). The kind segment keeps systems apart and is checked against
+    the change kind scheme; the scenario segment keeps scenarios apart when
+    stores merge.
   * Other scenario-scoped source ids (incidents, alerts, pages) follow the
     same `<scenario>/<id>` pattern via `scoped_uri`.
   * SKOS concepts: `<ns>/<scheme>/<code>`, schemes `<ns>/scheme/<scheme>`.
@@ -40,6 +46,7 @@ ONTOLOGY_GRAPH = URIRef(f"{BASE}/graph/ontology")
 
 _KIND = re.compile(r"[a-z][a-z0-9_]*")
 _ID = re.compile(r"[A-Za-z0-9._~@:/+-]+")
+_SCENARIO_CHANGE_ID = re.compile(r"chg-[a-z]+-\d+")
 
 
 def uri(ns: str, kind: str, stable_id: str) -> URIRef:
@@ -79,10 +86,14 @@ def scoped_uri(ns: str, kind: str, scenario: str, source_id: str) -> URIRef:
     return uri(ns, kind, f"{scenario}/{source_id}")
 
 
-def change_uri(scenario: str, kind: str, change_id: str) -> URIRef:
+def change_uri(scenario: str, kind: str, external_id: str) -> URIRef:
+    """URI of a change from its source-system (external) id, never a scenario change id."""
     if kind not in CHANGE_KINDS:
         raise ValueError(f"unknown change kind {kind!r}")
-    return scoped_uri("chg", kind, scenario, change_id)
+    if _SCENARIO_CHANGE_ID.fullmatch(external_id):
+        raise ValueError(f"{external_id!r} is a scenario change id; map it to its external id "
+                         "through _answers/<name>.json external_ids")
+    return scoped_uri("chg", kind, scenario, external_id)
 
 
 def scheme_uri(scheme: str) -> URIRef:

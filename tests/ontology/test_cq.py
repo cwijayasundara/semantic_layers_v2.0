@@ -1,25 +1,20 @@
 """Competency questions: the runner, the expected files, and the CQs
 themselves against the reference ABox. The real-store test waits for Task 12 (R8)."""
-import importlib.util
 import json
+import re
 
 import pyoxigraph as ox
 import pytest
 from rdflib import Dataset, Graph, Literal, URIRef
 from rdflib.namespace import RDF, XSD
 
-from e2ekg.graph.shacl import CQ_DIR, cq_question, cq_requires, expected, run_cq, validate
+from e2ekg.graph.shacl import (
+    CQ_DIR, ENRICHER_NAMES, LATER_STAGES, cq_question, cq_requires, expected, run_cq, validate,
+)
 from e2ekg.graph.uris import NS, app_uri, change_uri
 
 OPS = NS["ops"]
 CQS = sorted(CQ_DIR.glob("*.rq"))
-
-
-def _derive_module():
-    spec = importlib.util.spec_from_file_location("_derive_expected", CQ_DIR / "_derive_expected.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 @pytest.mark.skip(reason="store built in Task 12")
@@ -45,12 +40,23 @@ def test_cq01_is_the_posts_question():
                                    "Team Bedrock in us-east-1?")
 
 
-def test_expected_files_are_reproducible_from_the_answer_key():
-    derived = _derive_module().derive()
-    assert set(derived) == {p.stem for p in CQS}
+def test_expected_files_are_reproducible_from_the_generator(derive_module):
+    derived = derive_module.derive(strict=False)
+    missing = {p.stem for p in CQS} - set(derived)
+    assert {m[:2] for m in missing} <= derive_module.NEEDS_MANIFEST
     for p in CQS:
-        on_disk = json.loads(p.with_suffix(".expected.json").read_text())
-        assert on_disk == derived[p.stem], p.name
+        if p.stem in derived:
+            on_disk = json.loads(p.with_suffix(".expected.json").read_text())
+            assert on_disk == derived[p.stem], p.name
+    if missing:
+        pytest.skip(f"generator manifest missing, not re-derived: {sorted(missing)}")
+
+
+def test_derive_fails_clearly_without_the_manifest(derive_module, tmp_path, capsys):
+    with pytest.raises(derive_module.GeneratorOutputMissing, match="e2ekg generate"):
+        derive_module.derive(answers=tmp_path)
+    assert derive_module.main(["--answers", str(tmp_path)]) == 2
+    assert "e2ekg generate" in capsys.readouterr().err
 
 
 def test_expected_vars_match_select_vars():
@@ -61,38 +67,85 @@ def test_expected_vars_match_select_vars():
             p.with_suffix(".expected.json").read_text())["vars"], p.name
 
 
-def test_no_cq_projects_hash_derived_nodes():
+def test_no_cq_projects_hash_derived_nodes_or_scenario_change_ids():
     for p in CQS:
         for row in expected(p):
             for _, v in row:
                 if isinstance(v, str) and v.startswith("<"):
                     assert v.startswith(("<https://kg.local/app/application/",
                                          "<https://kg.local/chg/")), (p.name, v)
+                    assert not re.search(r"/chg-[a-z]+-\d+>$", v), (p.name, v)
 
 
-def test_spot_values_from_answer_key():
+def test_change_rows_are_external_ids_of_the_answer_key(derive_module):
+    ext = derive_module.EXTERNAL_OF              # scenario change id -> external id
+    by = {p.stem[:2]: p for p in CQS}
+    chg02 = {dict(r)["change"] for r in expected(by["02"])}
+
+    def u(cid, kind):
+        return f"<{change_uri('hero', kind, ext[cid])}>"
+    assert u("chg-cfg-0001", "config_change") in chg02
+    assert u("chg-exp-0001", "experiment_allocation") in chg02
+    assert u("chg-rel-0001", "client_release") not in chg02
+    assert u("chg-dep-0001", "deployment") not in chg02
+    assert {dict(r)["change"] for r in expected(by["15"])} == {
+        u("chg-exp-0001", "experiment_allocation")}
+
+
+def test_spot_values_from_the_generator(derive_module):
     by = {p.stem[:2]: p for p in CQS}
     rows = {k: [dict(r) for r in expected(p)] for k, p in by.items()}
     assert rows["04"] == [{"handle": "priya.nair", "pastApp": f"<{app_uri('lolomo-svc')}>"}]
-    assert rows["13"] == [{"previous": f"<{app_uri('api-gateway')}>",
+    assert rows["13"] == [{"incidentId": "INC-5377", "previous": f"<{app_uri('api-gateway')}>",
                            "current": f"<{app_uri('homepage-graphql')}>"}]
     assert rows["14"] == [{"support": "10", "frequency": "0.4"}]
-    assert {r["app"] for r in rows["06"]} == {f"<{app_uri(a)}>" for a in
-                                              ("api-gateway", "client-android", "row-ranker")}
-    chg02 = {r["change"] for r in rows["02"]}
-    assert f"<{change_uri('hero', 'config_change', 'chg-cfg-0001')}>" in chg02
-    assert f"<{change_uri('hero', 'client_release', 'chg-rel-0001')}>" not in chg02
-    assert f"<{change_uri('hero', 'deployment', 'chg-dep-0001')}>" not in chg02
+    # CQ05: the authored "bump min to 40 on the TMS ASG" beat, 30 s after as_of; the poller undid it.
+    beat = next(b for b in derive_module.live_beats() if "bump min to 40 on the TMS ASG" in b.text)
+    assert rows["05"] == [{"handle": beat.handle, "at": derive_module.ts(beat.at), "held": "false"}]
+    assert beat.at > derive_module.AS_OF
+    # CQ09/CQ12: the real pages and alerts, noise included.
+    assert {r["app"] for r in rows["09"]} == {f"<{app_uri(a)}>" for a in
+                                              ("edge-gateway", "homepage-graphql")}
+    assert {f"<{app_uri(a)}>" for a in ("edge-gateway", "homepage-graphql", "api-gateway",
+                                        "artwork-svc")} <= {r["app"] for r in rows["12"]}
+    # CQ10 counts deploy-shipped commits, which have no scenario change.
+    assert {"kind": "commit", "n": "6"} in rows["10"]
+
+
+def test_cq06_follows_the_generation_manifest(derive_module):
+    try:
+        rets = derive_module.retractions(derive_module.DEFAULT_ANSWERS)
+    except derive_module.GeneratorOutputMissing as e:
+        pytest.skip(str(e))
+    pre = {r.app for r in rets if r.at < derive_module.AS_OF}
+    post = {r.app for r in rets if r.at >= derive_module.AS_OF}
+    p = next(p for p in CQS if p.name.startswith("06-"))
+    assert {dict(r)["app"] for r in expected(p)} == {f"<{app_uri(a)}>" for a in pre}
+    assert "api-gateway" in post - pre          # seed 7: its first retraction is after as_of
+
+
+def test_as_of_literal_matches_the_generator(derive_module):
+    lit = derive_module.lit(derive_module.AS_OF)
+    assert lit == '"2026-10-14T23:00:00Z"^^xsd:dateTime'
+    for k in ("03", "06", "09", "10", "11"):
+        p = next(p for p in CQS if p.name.startswith(k))
+        assert lit in p.read_text(), p.name
 
 
 def test_requires_header():
-    assert cq_requires(CQS[6]) == {"correlation"}
-    assert all(not cq_requires(p) for i, p in enumerate(CQS) if i != 6)
+    for p in CQS:
+        req = cq_requires(p)
+        assert req and req <= set(ENRICHER_NAMES), (p.name, req)
+    gated = [p.name[:2] for p in CQS if cq_requires(p) & LATER_STAGES]
+    assert gated == ["07"]
 
 
 @pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
-def test_cq_on_reference_abox(cq, hero_reference):
-    assert run_cq(hero_reference, cq) == expected(cq)
+def test_cq_on_reference_abox(cq, hero_reference_built):
+    g, has_retractions = hero_reference_built
+    if cq.name.startswith("06-") and not has_retractions:
+        pytest.skip("generator manifest missing: no retractions in the reference ABox")
+    assert run_cq(g, cq) == expected(cq)
 
 
 def test_reference_abox_is_shacl_clean(hero_reference):
@@ -113,8 +166,8 @@ SELECT ?app ?t ?n WHERE {
 
 
 def _fixture_triples():
-    c1 = URIRef(change_uri("hero", "deployment", "d1"))
-    c2 = URIRef(change_uri("hero", "scaling", "s1"))
+    c1 = URIRef(change_uri("hero", "deployment", "01JDEADBEEF"))
+    c2 = URIRef(change_uri("hero", "scaling", "0edf7fa4-6f6b"))
     return [
         (c1, RDF.type, OPS.Deployment), (c1, OPS.changedApp, app_uri("a")),
         (c1, OPS.atTime, Literal("2026-10-14T15:00:00-07:00", datatype=XSD.dateTime)),

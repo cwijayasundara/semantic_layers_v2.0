@@ -3,3 +3,4 @@ data/
 .superpowers/
 .venv/
 __pycache__/
+.claude/worktrees/

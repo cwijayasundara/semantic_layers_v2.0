@@ -1,8 +1,11 @@
-# Which applications own a pool-exhaustion or timeout log pattern that spiked inside the incident window?
+# Which applications own a pool-exhaustion or timeout log pattern that spiked between the window start and the as_of cutoff?
+# requires: logs
+# as_of: investigator question, bounded by the R21 cutoff 2026-10-14T23:00:00Z.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
@@ -11,5 +14,5 @@ SELECT DISTINCT ?app ?category WHERE {
   ?spike a ops:LogSpike ; ops:ofPattern ?pattern ; ops:atTime ?t .
   ?pattern ops:onApplication ?app ; ops:errorCategory/skos:notation ?category .
   VALUES ?category { "pool_exhaustion" "timeout" }
-  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-14T23:00:00Z"^^xsd:dateTime)
 }

@@ -1,25 +1,31 @@
-# What kind of claim is the first mitigation about title-metadata-svc during the incident, and did it come before anyone named a root cause?
-# The poster's handle is set by the chat renderer, not the scenario, so it is not projected.
+# Who first proposed a mitigation on title-metadata-svc during the incident, when, and did it hold?
+# requires: chat, changes
+# Post-as_of: the hero's first TMS mitigation ("bump min to 40 on the TMS ASG") is
+# posted 30 s after the 23:00:00Z cutoff, so this is a post-incident question.
+# "Held" means no config change re-applied on the app within 10 minutes; the
+# Archaius poller re-applies the 12-instance floor ~2 min later, so it did not.
+# The chat never confirms a mitigation that worked (the property revert is only
+# staged by 17:55 PT), so this asks about the first one proposed.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX apps: <https://kg.local/app/application/>
-SELECT DISTINCT ?kind ?app ?beforeRootCause WHERE {
+SELECT DISTINCT ?handle ?at ?held WHERE {
   {
-    SELECT (MIN(?t0) AS ?first) WHERE {
+    SELECT (MIN(?t0) AS ?at) WHERE {
       ?m0 a ops:Mitigation ; chat:about apps:title-metadata-svc ; ops:atTime ?t0 .
       FILTER(?t0 >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t0 < "2026-10-15T01:00:00Z"^^xsd:dateTime)
     }
   }
-  ?m a ops:Mitigation ; chat:about ?app ; ops:atTime ?first ;
-     chat:claimKind/skos:notation ?kind .
-  FILTER(?app = apps:title-metadata-svc)
+  ?m a ops:Mitigation ; chat:about apps:title-metadata-svc ; ops:atTime ?at ;
+     (chat:postedBy|prov:wasDerivedFrom/chat:postedBy)/team:handle ?handle .
   BIND(NOT EXISTS {
-    ?rc chat:claimKind/skos:notation "root_cause" ; ops:atTime ?rt .
-    FILTER(?rt >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?rt < ?first)
-  } AS ?beforeRootCause)
+    ?undo a ops:ConfigChange ; ops:changedApp apps:title-metadata-svc ; ops:atTime ?ut .
+    FILTER(?ut > ?at && ?ut <= ?at + "PT10M"^^xsd:dayTimeDuration)
+  } AS ?held)
 }

@@ -1,5 +1,5 @@
 {
-  "question": "Which applications own a pool-exhaustion or timeout log pattern that spiked inside the incident window?",
+  "question": "Which applications own a pool-exhaustion or timeout log pattern that spiked between the window start and the as_of cutoff?",
   "vars": [
     "app",
     "category"

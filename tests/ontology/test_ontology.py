@@ -1,4 +1,6 @@
 """TBox, SKOS schemes and SHACL shapes (Task 11)."""
+import re
+
 import pyoxigraph as ox
 import pytest
 from rdflib import Graph, Literal, URIRef
@@ -90,8 +92,10 @@ def test_namespaces_and_uri_scheme():
     assert str(app_uri("api-gateway")) == "https://kg.local/app/application/api-gateway"
     assert str(uri("infra", "region", "us-east-1")) == "https://kg.local/infra/region/us-east-1"
     assert str(team_uri("Team Bedrock")) == "https://kg.local/team/team/team-bedrock"
-    assert (str(change_uri("hero", "config_change", "chg-cfg-0001"))
-            == "https://kg.local/chg/config_change/hero/chg-cfg-0001")
+    assert (str(change_uri("hero", "config_change", "fpc-3be29b76c7f9"))
+            == "https://kg.local/chg/config_change/hero/fpc-3be29b76c7f9")
+    assert (str(change_uri("hero", "scaling", "04094b3a-ea0e-7839-2e00-f1c216d421f6"))
+            == "https://kg.local/chg/scaling/hero/04094b3a-ea0e-7839-2e00-f1c216d421f6")
 
 
 @pytest.mark.parametrize("bad", [("nope", "k", "x"), ("ops", "k", ""), ("ops", "k", "has space"),
@@ -103,7 +107,13 @@ def test_uri_rejects_bad_parts(bad):
 
 def test_change_uri_rejects_unknown_kind():
     with pytest.raises(ValueError):
-        change_uri("hero", "rollout", "chg-1")
+        change_uri("hero", "rollout", "fpc-1")
+
+
+def test_change_uri_rejects_scenario_change_ids():
+    # R22: the graph only knows external ids; scenario ids map through _answers.
+    with pytest.raises(ValueError, match="external_ids"):
+        change_uri("hero", "config_change", "chg-cfg-0001")
 
 
 # --- SKOS --------------------------------------------------------------------
@@ -135,6 +145,49 @@ def test_unclassified_is_a_concept_outside_the_scheme():
     g = load_ontology()
     assert (CHAT.Unclassified, RDF.type, SKOS.Concept) in g
     assert g.value(CHAT.Unclassified, SKOS.inScheme) is None
+
+
+# R19: the class an enricher emits for each of the 13 signal types.
+SIGNAL_CLASS = {
+    "log_error": {OPS.LogSpike}, "metric_anomaly": {OPS.Anomaly},
+    "slow_trace": {OPS.TraceEdgeFingerprint}, "failed_trace": {OPS.TraceEdgeFingerprint},
+    "e2e_bottleneck": {OPS.TraceEdgeFingerprint}, "alert": {OPS.Alert},
+    "incident": {OPS.Incident}, "deployment": {OPS.Deployment, OPS.ClientRelease},
+    "config_change": {OPS.ConfigChange}, "experiment": {OPS.ExperimentAllocation},
+    "autoscaling": {OPS.ScalingEvent}, "commit": {OPS.Commit}, "error_pattern": {OPS.LogPattern},
+}
+
+
+def test_every_signal_type_maps_to_the_class_an_enricher_emits():
+    g = load_ontology()
+    assert set(SIGNAL_CLASS) == set(SIGNAL_TYPES)
+    for sig, classes in SIGNAL_CLASS.items():
+        got = {c for c in g.subjects(OPS.signalType, concept("signal_type", sig))
+               if (c, RDF.type, OWL.Class) in g}
+        assert got == classes, sig
+    header = (ONTOLOGY_DIR / "core.ttl").read_text().split("@prefix")[0]
+    for sig, classes in SIGNAL_CLASS.items():
+        line = next(x for x in header.splitlines() if x.startswith(f"#   {sig} "))
+        for c in classes:
+            assert f"ops:{c.rsplit('#', 1)[1]}" in line, (sig, line)
+
+
+def test_severity_alt_labels():
+    g = load_ontology()
+    for n in "123":
+        alts = {str(x) for x in g.objects(concept("severity", f"SEV{n}"), SKOS.altLabel)}
+        assert f"SEV {n}" in alts and f"SEV-{n}" in alts
+
+
+def test_region_and_at_time_comments_are_precise():
+    g = load_ontology()
+    assert "rdfs:label" in str(g.value(OPS.Region, RDFS.comment))
+    comment = str(g.value(OPS.atTime, RDFS.comment))
+    users = ("Change Deployment ConfigChange ScalingEvent ExperimentAllocation Commit "
+             "ClientRelease Anomaly LogSpike TraceEdgeFingerprint LogPattern Alert Page Incident "
+             "Message Claim Mitigation Hypothesis CausalLink").split()
+    for c in users:
+        assert re.search(rf"\b{c}\b", comment), c
 
 
 def test_change_kinds_map_to_signal_types():
@@ -204,6 +257,13 @@ def test_dependency_cap_both_directions():
 
 @pytest.mark.parametrize("finding,good", [
     ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 0.7", True),
+    ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 1", True),
+    ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 0", True),
+    ('ops:onApplication {a} ; ops:cites ex:e ; ops:confidence "1"^^xsd:int', True),
+    ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 7.0e-1", True),
+    ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 2", False),
+    ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence -1", False),
+    ('ops:onApplication {a} ; ops:cites ex:e ; ops:confidence "0.5"', False),
     ("ops:cites ex:e ; ops:confidence 0.7", False),
     ("ops:onApplication {a} ; ops:confidence 0.7", False),
     ("ops:onApplication {a} ; ops:cites ex:e ; ops:confidence 1.2", False),
@@ -241,3 +301,13 @@ def test_boolean_literal_type_for_incident_related():
     assert not validate(g)[0]
     g.set((URIRef("https://example.org/m"), CHAT.isIncidentRelated, Literal(True)))
     assert validate(g)[0]
+
+
+def test_signal_type_one_per_instance_several_per_class():
+    slow, failed = concept("signal_type", "slow_trace"), concept("signal_type", "failed_trace")
+    body = _app() + f"""ex:t a ops:TraceEdgeFingerprint ; ops:rawSelector "r" ;
+        ops:onApplication <{app_uri('a')}> ; ops:signalType <{slow}>"""
+    ok, report = validate(graph_from(body + " ."))
+    assert ok, report
+    assert not validate(graph_from(body + f" , <{failed}> ."))[0]
+    assert not validate(graph_from(body.replace(str(slow), str(concept("severity", "SEV2"))) + " ."))[0]

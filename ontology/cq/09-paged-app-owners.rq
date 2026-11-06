@@ -1,14 +1,17 @@
-# Which teams own the applications that paged on-call during the incident window?
+# Which teams own the applications that paged on-call between the window start and the as_of cutoff?
+# requires: catalog, alerts_incidents
+# as_of: investigator question, bounded by the R21 cutoff 2026-10-14T23:00:00Z.
 PREFIX ops:  <https://kg.local/ops#>
 PREFIX team: <https://kg.local/team#>
 PREFIX inc:  <https://kg.local/inc#>
 PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
 PREFIX apps: <https://kg.local/app/application/>
 SELECT DISTINCT ?app ?team WHERE {
   ?page a ops:Page ; ops:onApplication ?app ; ops:atTime ?t .
-  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-14T23:00:00Z"^^xsd:dateTime)
   ?app ops:ownedBy/rdfs:label ?team .
 }

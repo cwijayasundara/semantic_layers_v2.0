@@ -10,14 +10,55 @@
 # ABox conventions (what enrichers emit and the competency questions rely on):
 #   * Instance URIs follow https://kg.local/{ns}/{kind}/{stable_id}
 #     (e2ekg.graph.uris). Vocabulary terms live in https://kg.local/{ns}#.
-#   * Every time is an xsd:dateTime in UTC (ops:atTime, ops:windowStart, ops:windowEnd).
+#   * Every time is an xsd:dateTime in UTC (ops:atTime, ops:windowStart, ops:windowEnd),
+#     keeping sub-second precision (Slack ts microseconds).
 #   * Closed values are SKOS concept URIs from ontology/schemes/, never strings.
 #   * Every derived node carries ops:rawSelector (a raw record id) or
 #     prov:wasDerivedFrom (an upstream node).
+#   * Changes are identified by the opaque id their own system gives them (R22):
+#     Spinnaker execution id, fast-property change id, ASG activity id, A/B
+#     allocation id, git sha. The URI is chg/<change kind>/<scenario>/<external id>
+#     and chg:changeId holds the external id. Scenario change ids (chg-cfg-0001)
+#     never reach the graph; tests map them through _answers/<name>.json external_ids.
+#   * One change node per external id. A Spinnaker deployment's ops:atTime is its
+#     SUCCEEDED event; every ASG activity (any status, including the cancelled
+#     reset after a manual bump) is an ops:ScalingEvent; every fast-property line
+#     (including the poller's re-apply) is an ops:ConfigChange; a commit's
+#     ops:changedApp comes from its "[<app>]" subject prefix and is absent without one.
+#   * One ops:Alert per Radar alert id, ops:atTime = its firing time (the "ok"
+#     transition is not a new alert). One ops:Page per PagerDuty page id,
+#     ops:atTime = its triggered time.
 #   * An incident's current ops:affects is the latest affected service;
 #     superseded values move to inc:previouslyAffected (correction history).
+#     ops:atTime of an incident is its creation time.
 #   * A chat hypothesis is typed both ops:Claim and ops:Hypothesis; an
-#     ops:Hypothesis without ops:Claim is machine-made (RCA agent).
+#     ops:Hypothesis without ops:Claim is machine-made (RCA agent). A retraction
+#     claim ("scratch that, I don't think it's X") has chat:claimKind retraction,
+#     chat:about X and chat:retracts the claim of the message it replies to.
+#   * Investigations run AS OF a cutoff (R21: alert + 30 min; hero 16:00 PT =
+#     2026-10-14T23:00:00Z). The graph holds the whole window; investigator
+#     questions filter by the cutoff themselves (see ontology/cq/).
+#
+# Signal types (ontology/schemes/signal_type.ttl, the post's 13) and the class an
+# enricher emits for each. Each class states its type(s) with ops:signalType.
+# A class with one type needs no instance-level ops:signalType; instances of
+# ops:TraceEdgeFingerprint must carry exactly one.
+#
+#   signal type      class                     emitted by (Task 12 enricher)
+#   ---------------  ------------------------  -----------------------------
+#   log_error        ops:LogSpike              logs
+#   metric_anomaly   ops:Anomaly               metrics
+#   slow_trace       ops:TraceEdgeFingerprint  traces (latency over baseline)
+#   failed_trace     ops:TraceEdgeFingerprint  traces (errors over baseline)
+#   e2e_bottleneck   ops:TraceEdgeFingerprint  traces (critical-path edge of a request)
+#   alert            ops:Alert                 alerts_incidents
+#   incident         ops:Incident              alerts_incidents
+#   deployment       ops:Deployment, ops:ClientRelease   changes
+#   config_change    ops:ConfigChange          changes
+#   experiment       ops:ExperimentAllocation  changes
+#   autoscaling      ops:ScalingEvent          changes
+#   commit           ops:Commit                changes
+#   error_pattern    ops:LogPattern            logs (chronic pattern, not a spike)
 
 @prefix ops:   <https://kg.local/ops#> .
 @prefix app:   <https://kg.local/app#> .
@@ -38,6 +79,7 @@
 @prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
 @prefix prov:  <http://www.w3.org/ns/prov#> .
 @prefix time:  <http://www.w3.org/2006/time#> .
+@prefix sigt:  <https://kg.local/ops/signal_type/> .
 
 <https://kg.local/ontology/core> a owl:Ontology ;
     rdfs:label "e2ekg core ontology" ;
@@ -63,7 +105,7 @@ ops:Person a owl:Class ;
 
 ops:Region a owl:Class ;
     rdfs:label "Region" ;
-    rdfs:comment "A cloud region such as us-east-1. Aligns with the OpenTelemetry cloud.region attribute." ;
+    rdfs:comment "A cloud region such as us-east-1, at infra/region/<region>. Carries an rdfs:label equal to the region name (\"us-east-1\"), which the competency questions match on. Aligns with the OpenTelemetry cloud.region attribute." ;
     rdfs:seeAlso <https://opentelemetry.io/docs/specs/semconv/resource/cloud/> .
 
 ops:Cluster a owl:Class ;
@@ -83,27 +125,33 @@ ops:Change a owl:Class ;
 
 ops:Deployment a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Deployment" ;
-    rdfs:comment "A new server-side version rolled out (Spinnaker pipeline execution)." .
+    rdfs:comment "A new server-side version rolled out (Spinnaker pipeline execution)."  ;
+    ops:signalType sigt:deployment .
 
 ops:ConfigChange a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Config change" ;
-    rdfs:comment "A dynamic property (fast property) value change, with old and new values." .
+    rdfs:comment "A dynamic property (fast property) value change, with old and new values."  ;
+    ops:signalType sigt:config_change .
 
 ops:ScalingEvent a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Scaling event" ;
-    rdfs:comment "An autoscaling group capacity change (scale in or scale out)." .
+    rdfs:comment "An autoscaling group capacity change (scale in or scale out)."  ;
+    ops:signalType sigt:autoscaling .
 
 ops:ExperimentAllocation a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Experiment allocation" ;
-    rdfs:comment "A change in the allocation of an A/B test cell." .
+    rdfs:comment "A change in the allocation of an A/B test cell."  ;
+    ops:signalType sigt:experiment .
 
 ops:Commit a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Commit" ;
-    rdfs:comment "A source control commit to an application's repository." .
+    rdfs:comment "A source control commit to an application's repository."  ;
+    ops:signalType sigt:commit .
 
 ops:ClientRelease a owl:Class ; rdfs:subClassOf ops:Change ;
     rdfs:label "Client release" ;
-    rdfs:comment "A device client version rolled out to members." .
+    rdfs:comment "A device client version rolled out to members."  ;
+    ops:signalType sigt:deployment .
 
 # ----------------------------------------------------------------- signals
 
@@ -118,29 +166,35 @@ ops:MetricSeries a owl:Class ; rdfs:subClassOf ops:Signal ;
 
 ops:Anomaly a owl:Class ; rdfs:subClassOf ops:Signal ;
     rdfs:label "Anomaly" ;
-    rdfs:comment "A detected change point or outlier on a metric series, with onset time and magnitude." .
+    rdfs:comment "A detected change point or outlier on a metric series, with onset time and magnitude."  ;
+    ops:signalType sigt:metric_anomaly .
 
 ops:LogPattern a owl:Class ; rdfs:subClassOf ops:Signal ;
     rdfs:label "Log pattern" ;
-    rdfs:comment "A mined log template (Drain) of one application, classified into an error category." .
+    rdfs:comment "A mined log template (Drain) of one application, classified into an error category."  ;
+    ops:signalType sigt:error_pattern .
 
 ops:LogSpike a owl:Class ; rdfs:subClassOf ops:Signal ;
     rdfs:label "Log spike" ;
-    rdfs:comment "A burst of one log pattern over its baseline inside a time window, with count and magnitude." .
+    rdfs:comment "A burst of one log pattern over its baseline inside a time window, with count and magnitude."  ;
+    ops:signalType sigt:log_error .
 
 ops:TraceEdgeFingerprint a owl:Class ; rdfs:subClassOf ops:Signal ;
     rdfs:label "Trace edge fingerprint" ;
-    rdfs:comment "Aggregated latency and error statistics of one caller to callee edge over a window, from repaired span trees." .
+    rdfs:comment "Aggregated latency and error statistics of one caller to callee edge over a window, from repaired span trees."  ;
+    ops:signalType sigt:slow_trace, sigt:failed_trace, sigt:e2e_bottleneck .
 
 ops:Alert a owl:Class ; rdfs:subClassOf ops:Signal ;
     rdfs:label "Alert" ;
-    rdfs:comment "A threshold alert firing (Radar) on an application." .
+    rdfs:comment "A threshold alert firing (Radar) on an application."  ;
+    ops:signalType sigt:alert .
 
 # ---------------------------------------------------------------- response
 
 ops:Incident a owl:Class ;
     rdfs:label "Incident" ;
-    rdfs:comment "An incident record (incident.io) with severity, affected services and responders." .
+    rdfs:comment "An incident record (incident.io) with severity, affected services and responders."  ;
+    ops:signalType sigt:incident .
 
 ops:Page a owl:Class ;
     rdfs:label "Page" ;
@@ -203,7 +257,7 @@ ops:changedApp a owl:ObjectProperty ; rdfs:domain ops:Change ; rdfs:range ops:Ap
 ops:changeKind a owl:ObjectProperty ; rdfs:range skos:Concept ;
     rdfs:label "change kind" ; rdfs:comment "A concept from the change kind scheme." .
 ops:signalType a owl:ObjectProperty ; rdfs:range skos:Concept ;
-    rdfs:label "signal type" ; rdfs:comment "One of the 13 correlation signal types (signal type scheme)." .
+    rdfs:label "signal type" ; rdfs:comment "One of the 13 correlation signal types (signal type scheme). On a TBox class: the type(s) its instances are (see the header table); on a change kind concept: its type; on an instance: required only when its class has several (ops:TraceEdgeFingerprint); on a causal link: the type of the linked signal." .
 ops:errorCategory a owl:ObjectProperty ; rdfs:range skos:Concept ;
     rdfs:label "error category" ; rdfs:comment "A concept from the error category scheme." .
 ops:faultKind a owl:ObjectProperty ; rdfs:range skos:Concept ;
@@ -262,7 +316,7 @@ ops:appKind a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xs
 ops:tier a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xsd:integer ;
     rdfs:label "tier" ; rdfs:comment "Catalog criticality tier (0 is most critical)." .
 ops:atTime a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
-    rdfs:label "at time" ; rdfs:comment "UTC instant of a change, signal onset, message or incident opening. Equivalent in intent to time:inXSDDateTimeStamp." ;
+    rdfs:label "at time" ; rdfs:comment "UTC instant. Used by every ops:Change subclass (Deployment: SUCCEEDED time; ConfigChange, ScalingEvent, ExperimentAllocation, Commit, ClientRelease: event time), ops:Anomaly (onset), ops:LogSpike and ops:TraceEdgeFingerprint (equal to ops:windowStart), ops:LogPattern (first seen in the window), ops:Alert (firing), ops:Page (triggered), ops:Incident (created), ops:Message (posted), ops:Claim and its subclasses ops:Mitigation and ops:Hypothesis (time of the source message, or creation for machine hypotheses) and ops:CausalLink (time of the linked signal). Equivalent in intent to time:inXSDDateTimeStamp." ;
     rdfs:seeAlso time:inXSDDateTimeStamp .
 ops:windowStart a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
     rdfs:label "window start" ; rdfs:comment "UTC start of the interval a fingerprint aggregates." ; rdfs:seeAlso time:hasBeginning .
@@ -287,7 +341,7 @@ ops:droppedEdges a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:ran
 team:handle a owl:DatatypeProperty ; rdfs:domain ops:Person ; rdfs:range xsd:string ;
     rdfs:label "handle" ; rdfs:comment "Stable chat / on-call handle such as priya.nair." .
 chg:changeId a owl:DatatypeProperty ; rdfs:domain ops:Change ; rdfs:range xsd:string ;
-    rdfs:label "change id" ; rdfs:comment "Source-system change id (scenario scoped), for example chg-cfg-0001." .
+    rdfs:label "change id" ; rdfs:comment "The change's opaque id in its own system (R22): Spinnaker execution id, fast-property change id (fpc-...), ASG activity id, A/B allocation id (alloc-...) or git sha. Also the last URI segment." .
 inc:incidentId a owl:DatatypeProperty ; rdfs:domain ops:Incident ; rdfs:range xsd:string ;
     rdfs:label "incident id" ; rdfs:comment "Source-system incident id, for example INC-5377." .
 inc:correctedAt a owl:DatatypeProperty ; rdfs:domain ops:Incident ; rdfs:range xsd:dateTime ;

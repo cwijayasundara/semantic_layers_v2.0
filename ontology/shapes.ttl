@@ -7,6 +7,7 @@
 @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
 @prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
 @prefix prov:  <http://www.w3.org/ns/prov#> .
 @prefix ops:   <https://kg.local/ops#> .
 @prefix chat:  <https://kg.local/chat#> .
@@ -121,13 +122,21 @@ shp:ChangeKind a sh:NodeShape ;
                                 sh:hasValue <https://kg.local/chg/scheme/change_kind> ] ] ;
     ] .
 
+# Instances and change kind concepts carry one signal type. A TBox class may
+# declare several (ops:TraceEdgeFingerprint: slow_trace, failed_trace,
+# e2e_bottleneck); see the mapping table in core.ttl.
 shp:SignalType a sh:NodeShape ;
     sh:targetSubjectsOf ops:signalType ;
     sh:property [
-        sh:path ops:signalType ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:path ops:signalType ; sh:nodeKind sh:IRI ;
         sh:node [ sh:property [ sh:path skos:inScheme ;
                                 sh:hasValue <https://kg.local/ops/scheme/signal_type> ] ] ;
-    ] .
+    ] ;
+    sh:or (
+        [ sh:property [ sh:path rdf:type ; sh:hasValue owl:Class ] ]
+        [ sh:property [ sh:path ops:signalType ; sh:maxCount 1 ] ]
+    ) ;
+    sh:message "ops:signalType: more than one value on a non-class node" .
 
 shp:ErrorCategory a sh:NodeShape ;
     sh:targetSubjectsOf ops:errorCategory ;
@@ -171,7 +180,12 @@ shp:Confidence a sh:NodeShape ;
     sh:targetSubjectsOf ops:confidence ;
     sh:property [
         sh:path ops:confidence ;
-        sh:or ( [ sh:datatype xsd:decimal ] [ sh:datatype xsd:double ] [ sh:datatype xsd:float ] ) ;
+        # Any XSD numeric datatype: integers 0 and 1 are valid confidences too.
+        sh:or ( [ sh:datatype xsd:decimal ] [ sh:datatype xsd:double ] [ sh:datatype xsd:float ]
+                [ sh:datatype xsd:integer ] [ sh:datatype xsd:int ] [ sh:datatype xsd:long ]
+                [ sh:datatype xsd:short ] [ sh:datatype xsd:byte ]
+                [ sh:datatype xsd:nonNegativeInteger ] [ sh:datatype xsd:positiveInteger ]
+                [ sh:datatype xsd:unsignedInt ] [ sh:datatype xsd:unsignedLong ] ) ;
         sh:minInclusive 0 ;
         sh:maxInclusive 1 ;
         sh:message "ops:confidence must be a number in [0, 1]" ;
