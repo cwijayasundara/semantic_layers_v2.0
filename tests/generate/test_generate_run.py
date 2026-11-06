@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 from helpers import (
@@ -27,6 +30,21 @@ def test_generate_is_byte_deterministic(generated_hero, tmp_path):
     assert tree_hash(generated_hero) == tree_hash(tmp_path / "b" / "hero")
     a = (generated_hero.parent / "_answers" / "hero.json").read_bytes()
     assert a == (tmp_path / "b" / "_answers" / "hero.json").read_bytes()
+
+
+def test_generate_is_deterministic_across_processes(tmp_path):
+    """Two fresh interpreters with different hash seeds produce the same tree."""
+    procs = []
+    for k, out in enumerate(("p1", "p2")):
+        env = {**os.environ, "PYTHONHASHSEED": str(k + 1)}
+        procs.append(subprocess.Popen(
+            [sys.executable, "-m", "e2ekg.cli", "generate", "--scenario", "hero", "--scale",
+             "0.05", "--out", str(tmp_path / out)], env=env, stdout=subprocess.DEVNULL))
+    assert [p.wait(timeout=600) for p in procs] == [0, 0]
+    assert tree_hash(tmp_path / "p1" / "hero") == tree_hash(tmp_path / "p2" / "hero")
+    for name in ("hero.json", "hero.manifest.json"):
+        assert ((tmp_path / "p1" / "_answers" / name).read_bytes()
+                == (tmp_path / "p2" / "_answers" / name).read_bytes())
 
 
 def test_generate_refuses_non_empty_out(tmp_path):

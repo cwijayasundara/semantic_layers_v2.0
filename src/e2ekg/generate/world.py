@@ -233,3 +233,47 @@ class World:
 
 def tags(*names: str) -> frozenset[str]:
     return frozenset(f"evidence:{n}" for n in names)
+
+
+AS_OF_AFTER_ALERT = timedelta(minutes=30)   # R21: the RCA runs as of alert + 30 min
+MITIGATION_MIN = 40                         # "bump min to 40"
+MITIGATION_OFFSETS = (timedelta(minutes=2), timedelta(minutes=31))  # after as_of
+MITIGATION_RESET_AFTER = timedelta(seconds=50)
+
+
+def as_of_utc(s: Scenario) -> datetime | None:
+    alerts = [lk.at_utc for lk in s.answer_key.causal_chain if lk.signal == "alert"]
+    return min(alerts) + AS_OF_AFTER_ALERT if alerts else None
+
+
+@dataclass(frozen=True)
+class Mitigation:
+    """A failed manual capacity bump that the fast-property poller undoes (R23)."""
+    app: str
+    asg: str
+    prop: str
+    at_utc: datetime
+    reset_utc: datetime
+    floor: int
+    bumped_to: int
+
+
+def mitigation_attempts(s: Scenario) -> tuple[Mitigation, ...]:
+    """Renderer-side mitigation events, not Scenario changes: on a capacity
+    reduction driven by an `*.asg.minInstances` fast property, responders bump
+    the ASG to MITIGATION_MIN twice after the cutoff and the poller resets it."""
+    f, cut = s.fault, as_of_utc(s)
+    if f.kind != "capacity_reduction" or cut is None:
+        return ()
+    prop = next((c for c in s.changes if c.kind == "config_change" and c.app == f.target
+                 and c.attrs.get("property", "").endswith(".asg.minInstances")), None)
+    scales = sorted((c for c in s.changes if c.kind == "scaling" and c.app == f.target),
+                    key=lambda c: c.at_utc)
+    if prop is None or not scales:
+        return ()
+    floor = int(scales[-1].attrs["desired_capacity"])
+    return tuple(Mitigation(app=f.target, asg=scales[-1].attrs.get("asg", f"{f.target}-v001"),
+                            prop=prop.attrs["property"], at_utc=cut + off,
+                            reset_utc=cut + off + MITIGATION_RESET_AFTER, floor=floor,
+                            bumped_to=MITIGATION_MIN)
+                 for off in MITIGATION_OFFSETS if cut + off < s.window.end_utc)

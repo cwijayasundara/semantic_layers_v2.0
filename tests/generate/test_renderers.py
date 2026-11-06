@@ -231,15 +231,45 @@ def test_incident_affected_service_corrected_after_40_min(generated_hero):
     assert t1 - t0 == timedelta(minutes=40)
 
 
-def test_change_events_carry_change_ids(hero, generated_hero):
+def test_change_events_carry_opaque_external_ids(hero, generated_hero):
+    ext = load_answers("hero", generated_hero.parent)["external_ids"]
+    assert sorted(ext.values()) == sorted(c.id for c in hero.changes)
     text = "".join((generated_hero / "events" / f).read_text()
                    for f in ("spinnaker.jsonl", "properties.log", "asg.jsonl",
-                             "ab_allocations.csv"))
-    for c in hero.changes:
-        assert c.id in text, c.id
+                             "ab_allocations.csv", "commits.log"))
+    for external, scenario_id in ext.items():
+        assert external in text, scenario_id
     props = (generated_hero / "events/properties.log").read_text()
     assert "title-metadata-svc.asg.minInstances" in props
     assert (generated_hero / "events/commits.log").read_text().startswith("commit ")
+
+
+def test_no_raw_file_contains_a_scenario_change_id(hero, generated_hero):
+    ids = [c.id.encode() for c in hero.changes]
+    for f in generated_hero.rglob("*"):
+        if f.is_file():
+            data = f.read_bytes()
+            assert b"chg-" not in data and not any(i in data for i in ids), f
+
+
+def test_failed_mitigation_is_in_the_signals(generated_hero):
+    asg = [r for r in jsonl(generated_hero / "events/asg.jsonl")
+           if hero_local("16:00") <= _ts(r["ts"]) < hero_local("18:00")]
+    moves = [(_ts(r["ts"]), r["previous_capacity"], r["desired_capacity"]) for r in asg]
+    assert [(p, d) for _, p, d in moves] == [(12, 40), (40, 12), (12, 40), (40, 12)]
+    assert moves[0][0] == hero_local("16:02") and moves[2][0] == hero_local("16:31")
+    assert all(timedelta(0) < moves[k + 1][0] - moves[k][0] < timedelta(minutes=1)
+               for k in (0, 2))
+    props = (generated_hero / "events/properties.log").read_text().splitlines()
+    resets = [ln for ln in props if "archaius-poller" in ln and "old=40" in ln and "new=12" in ln]
+    assert len(resets) == 2
+    texts = [(float(m["ts"]), m["text"]) for m in slack_messages(generated_hero, HERO)]
+    first_bump = min(t for t, x in texts if "bump min to 40" in x)
+    assert first_bump < moves[0][0].timestamp()
+
+
+def _ts(v: str) -> datetime:
+    return datetime.fromisoformat(v.replace("Z", "+00:00"))
 
 
 def test_history_incidents_and_pages_are_historical(hero, generated_hero):
@@ -273,6 +303,11 @@ def test_hero_channel_story(generated_hero):
     assert any("TMS" in t for t in texts) and any("the ranker" in t for t in texts)
 
 
+def test_answers_carry_the_as_of_cutoff(generated_hero):
+    ans = load_answers("hero", generated_hero.parent)
+    assert _ts(ans["as_of_utc"]) == hero_local("16:00")
+
+
 def test_past_incident_channels(hero, generated_hero):
     chans = [p for p in (generated_hero / "slack").iterdir() if p.name != HERO]
     assert len(chans) == len(hero.history)
@@ -280,3 +315,53 @@ def test_past_incident_channels(hero, generated_hero):
         msgs = slack_messages(generated_hero, c.name)
         assert 10 <= len(msgs) <= 40, c.name
         assert all(float(m["ts"]) < hero.window.start_utc.timestamp() for m in msgs)
+
+
+# ---- R21: no answer leakage in chat, all seven scenarios ----
+
+BANNED = ("herring", "red herring", "root_cause", "root cause")
+
+
+@pytest.fixture(scope="module")
+def all_beats():
+    from e2ekg.generate.render_chat import chat_beats
+    from e2ekg.scenario.variants import variant_scenarios
+    return [(s, chat_beats(s, np.random.default_rng(3)))
+            for s in (hero_scenario(), *variant_scenarios())]
+
+
+def test_no_verdict_before_as_of_in_any_scenario(all_beats):
+    from e2ekg.generate.hero_chat import HISTORY, PRE_CUTOFF_PHASES
+    from e2ekg.generate.world import as_of_utc
+    for s, beats in all_beats:
+        live = [b for b in beats if b.phase != HISTORY]
+        cut = as_of_utc(s)
+        if cut is None:
+            assert live == [], s.name
+            continue
+        assert any(b.phase not in PRE_CUTOFF_PHASES for b in live), s.name
+        for b in live:
+            assert b.phase in PRE_CUTOFF_PHASES or b.at >= cut, (s.name, b.text)
+
+
+def test_variant_chat_has_right_and_wrong_hypotheses_before_cutoff(all_beats):
+    from e2ekg.generate.world import as_of_utc
+    for s, beats in all_beats:
+        if s.name == "hero" or s.answer_key.root_cause_change_id is None:
+            continue
+        by_id = {c.id: c for c in s.changes}
+        early = [b.text for b in beats if b.phase == "hypothesis" and b.at < as_of_utc(s)]
+        root = by_id[s.answer_key.root_cause_change_id].app
+        wrong = {by_id[h].app for h in s.answer_key.red_herring_change_ids}
+        assert any(t.startswith(f"{root} had a") for t in early), s.name
+        assert any(t.startswith(f"{a} had a") for a in wrong for t in early), s.name
+
+
+def test_no_banned_words_in_any_chat(all_beats, generated_hero):
+    texts = [b.text for _, beats in all_beats for b in beats]
+    texts += [m.get("text", "") for f in (generated_hero / "slack").rglob("*.jsonl")
+              for m in jsonl(f)]
+    for t in texts:
+        low = t.lower()
+        assert not any(w in low for w in BANNED), t
+        assert "chg-" not in low, t

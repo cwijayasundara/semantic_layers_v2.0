@@ -1,6 +1,7 @@
 """generate_scenario: render every signal from one Scenario, apply the mess,
 write the raw tree, and keep generator-only truth outside it (R5):
-`<out>/../_answers/<name>.json` (answer key + evidence raw ids) and
+`<out>/../_answers/<name>.json` (answer key, `as_of_utc` cutoff (R21),
+`external_ids` raw-id -> scenario change id map (R22), evidence raw ids) and
 `<out>/../_answers/<name>.manifest.json` (injections, files, counts)."""
 import json
 import zlib
@@ -13,10 +14,11 @@ from e2ekg.generate.mess import apply_mess
 from e2ekg.generate.records import RawRecord, write_source
 from e2ekg.generate.render_catalog import render_catalog
 from e2ekg.generate.render_chat import render_chat
-from e2ekg.generate.render_events import render_events
+from e2ekg.generate.render_events import external_ids, render_events
 from e2ekg.generate.render_logs import render_logs
 from e2ekg.generate.render_metrics import render_metrics
 from e2ekg.generate.render_traces import Population, render_traces
+from e2ekg.generate.world import as_of_utc
 from e2ekg.scenario.model import Scenario
 from e2ekg.scenario.propagation import propagate
 
@@ -85,8 +87,11 @@ def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0) -> Gene
         trace_population=pop.as_dict(),
         injections=[{"injector_id": i.injector_id, "rel_path": i.rel_path, "detail": i.detail}
                     for i in injections])
+    cut = as_of_utc(scenario)
     answers = {"name": scenario.name, "seed": scenario.seed,
                "answer_key": scenario.answer_key.model_dump(mode="json"),
+               "as_of_utc": cut.isoformat().replace("+00:00", "Z") if cut else None,
+               "external_ids": external_ids(scenario),
                "evidence_raw_ids": evidence, "evidence_by_tag": by_tag}
     adir = out.parent / ANSWERS_DIR
     adir.mkdir(parents=True, exist_ok=True)

@@ -5,8 +5,13 @@ events/spinnaker.jsonl (deployments, client releases), events/properties.log
 events/ab_allocations.csv, events/commits.log (git log), alerts/radar.jsonl,
 pagerduty/pages.jsonl and incidents/incident_io.jsonl (R13 names).
 
-Every scenario change carries its id as `change_id` (Spinnaker, properties,
-ASG), `allocation_id` (A/B csv) or a `Change-Id:` trailer (commits). The live
+Scenario change ids never reach the raw tree (R22): each change gets an
+opaque, deterministic external id in its own system's shape (Spinnaker
+execution id, fast-property change id, ASG activity UUID, A/B allocation id,
+git sha); `external_ids()` is the external -> scenario id map for _answers.
+The failed "bump min to 40" mitigations (world.mitigation_attempts, R23) are
+rendered as an ASG change, the poller's property re-apply and the ASG reset;
+they are renderer-side events, not Scenario changes. The live
 incident's first `affected_services` is a wrong early guess (the latest
 red-herring deployment's app), corrected 40 min later. History incidents get
 incident records and pages at their own historical times."""
@@ -24,7 +29,7 @@ from e2ekg.generate.people import (
     oncall,
 )
 from e2ekg.generate.records import RawRecord
-from e2ekg.generate.world import World, tags
+from e2ekg.generate.world import World, mitigation_attempts, tags
 from e2ekg.scenario.model import Change, Scenario
 from e2ekg.scenario.propagation import Degradation
 
@@ -53,11 +58,36 @@ def _hexid(*parts: object, n: int = 40) -> str:
     return hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:n]
 
 
+def _uuid(*parts: object) -> str:
+    h = _hexid(*parts, n=32)
+    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+
+
+def external_id(s: Scenario, c: Change) -> str:
+    """The id a change carries in its own system; no role or scenario id in it."""
+    key = (s.name, s.seed, c.id)
+    match c.kind:
+        case "deployment" | "client_release":
+            return "01J" + _hexid("exec", *key, n=23).upper()
+        case "config_change":
+            return "fpc-" + _hexid("fp", *key, n=12)
+        case "scaling":
+            return _uuid("asg", *key)
+        case "experiment_allocation":
+            return "alloc-" + _hexid("ab", *key, n=10)
+        case "commit":
+            return (c.attrs.get("sha", "") + _hexid("sha", *key))[:40]
+    raise ValueError(c.kind)
+
+
+def external_ids(s: Scenario) -> dict[str, str]:
+    return {external_id(s, c): c.id for c in s.changes}
+
+
 def _deploy(w: World, c: Change, rng) -> list[RawRecord]:
     tg = w.change_tags(c)
-    exec_id = "01J" + _hexid("exec", c.id, n=23).upper()
     who = HISTORY_HANDLES[int(rng.integers(len(HISTORY_HANDLES)))]
-    base = {"id": exec_id, "change_id": c.id}
+    base = {"id": external_id(w.scenario, c)}
     if c.kind == "client_release":
         return [_rec("events/spinnaker.jsonl", "spinnaker_jsonl", {
             **base, "type": "client_release", "app": c.app, "pipeline": "Play Store promote",
@@ -82,7 +112,7 @@ def _config(w: World, c: Change, rng) -> RawRecord:
     return _rec("events/properties.log", "properties_log", {
         "ts": c.at_utc, "app": c.app, "property": c.attrs["property"], "old": c.attrs.get("old"),
         "new": c.attrs.get("new"), "user": HISTORY_HANDLES[int(rng.integers(len(HISTORY_HANDLES)))],
-        "source": "fastprops-ui", "change_id": c.id, **extra}, w.change_tags(c))
+        "source": "fastprops-ui", "id": external_id(w.scenario, c), **extra}, w.change_tags(c))
 
 
 def _scaling(w: World, c: Change) -> RawRecord:
@@ -90,8 +120,8 @@ def _scaling(w: World, c: Change) -> RawRecord:
     stamp = c.at_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     return _rec("events/asg.jsonl", "asg_jsonl", {
         "ts": c.at_utc, "app": c.app, "asg": c.attrs.get("asg"),
-        "activity_id": _hexid("asg", c.id, n=8) + "-" + _hexid("asg2", c.id, n=4),
-        "change_id": c.id, "previous_capacity": int(prev), "desired_capacity": int(des),
+        "activity_id": external_id(w.scenario, c),
+        "previous_capacity": int(prev), "desired_capacity": int(des),
         "status": "Successful",
         "cause": f"At {stamp} a monitor alarm TargetTracking-{c.attrs.get('asg')}-AlarmLow "
                  f"in state ALARM triggered policy cpu-target-tracking changing the desired "
@@ -108,27 +138,55 @@ def _ab(w: World, c: Change, rng) -> RawRecord:
         "new_allocation_pct": c.attrs.get("new_allocation_pct"),
         "population": c.attrs.get("population", "members"), "app": c.app,
         "actor": HISTORY_HANDLES[int(rng.integers(len(HISTORY_HANDLES)))],
-        "allocation_id": c.id}, w.change_tags(c))
+        "allocation_id": external_id(w.scenario, c)}, w.change_tags(c))
 
 
 def _commits(w: World, rng) -> list[RawRecord]:
     out = []
     for c in w.scenario.changes:
         if c.kind == "commit":
-            sha = (c.attrs.get("sha", "") + _hexid("sha", c.id))[:40]
             out.append(_rec("events/commits.log", "gitlog", {
-                "sha": sha, "author": AUTHORS[int(rng.integers(len(AUTHORS)))], "date": c.at_utc,
-                "message": f"{c.attrs.get('message', 'update')}\n\nChange-Id: {c.id}"},
-                w.change_tags(c)))
+                "sha": external_id(w.scenario, c),
+                "author": AUTHORS[int(rng.integers(len(AUTHORS)))], "date": c.at_utc,
+                "message": c.attrs.get("message", "update")}, w.change_tags(c)))
         elif c.kind == "deployment":  # the code a deployment ships, landed earlier
             for k in range(1 + int(rng.integers(2))):
                 at = c.at_utc - timedelta(minutes=int(rng.integers(25, 140)))
                 out.append(_rec("events/commits.log", "gitlog", {
-                    "sha": _hexid("sha", c.id, k),
+                    "sha": _hexid("sha", w.scenario.name, w.scenario.seed, c.id, k),
                     "author": AUTHORS[int(rng.integers(len(AUTHORS)))],
                     "date": at, "message": f"[{c.app}] "
                     f"{DEPLOY_COMMITS[int(rng.integers(len(DEPLOY_COMMITS)))]}"}))
     return sorted(out, key=lambda r: r.at_utc)
+
+
+def _mitigations(w: World, rng) -> list[RawRecord]:
+    out = []
+    for k, m in enumerate(mitigation_attempts(w.scenario)):
+        who = HISTORY_HANDLES[int(rng.integers(len(HISTORY_HANDLES)))]
+        key = (w.scenario.name, "mitigation", k)
+        out.append(_rec("events/asg.jsonl", "asg_jsonl", {
+            "ts": m.at_utc, "app": m.app, "asg": m.asg, "activity_id": _uuid("bump", *key),
+            "previous_capacity": m.floor, "desired_capacity": m.bumped_to,
+            "status": "Successful",
+            "cause": f"At {m.at_utc:%Y-%m-%dT%H:%M:%SZ} a user request update of AutoScalingGroup "
+                     f"constraints to min: {m.bumped_to}, desired: {m.bumped_to} changing the "
+                     f"desired capacity from {m.floor} to {m.bumped_to}.",
+            "description": f"Launching {m.bumped_to - m.floor} EC2 instances", "user": who}))
+        out.append(_rec("events/properties.log", "properties_log", {
+            "ts": m.reset_utc - timedelta(seconds=10), "app": m.app, "property": m.prop,
+            "old": str(m.bumped_to), "new": str(m.floor), "user": "archaius-poller",
+            "source": "asg-reconciler", "id": "fpc-" + _hexid("reapply", *key, n=12),
+            "note": "ASG MinSize drifted from fast property; re-applied"}))
+        out.append(_rec("events/asg.jsonl", "asg_jsonl", {
+            "ts": m.reset_utc, "app": m.app, "asg": m.asg, "activity_id": _uuid("reset", *key),
+            "previous_capacity": m.bumped_to, "desired_capacity": m.floor,
+            "status": "Cancelled",
+            "cause": f"At {m.reset_utc:%Y-%m-%dT%H:%M:%SZ} an update of AutoScalingGroup "
+                     f"constraints to min: {m.floor} by {m.prop} changing the desired capacity "
+                     f"from {m.bumped_to} to {m.floor}.",
+            "description": f"Terminating {m.bumped_to - m.floor} pending EC2 instances"}))
+    return out
 
 
 def _alert(n: int, at, app, severity, metric, state, summary, tg=frozenset()) -> RawRecord:
@@ -265,6 +323,7 @@ def render_events(scenario: Scenario, degradations: tuple[Degradation, ...],
             changes.append(_scaling(w, c))
         elif c.kind == "experiment_allocation":
             ab.append(_ab(w, c, rng))
+    changes += _mitigations(w, rng)
     alerts, pages, incs = _live(w, rng)
     alerts += _noise_alerts(w, rng)
     hp, hi = _history(w, rng)
