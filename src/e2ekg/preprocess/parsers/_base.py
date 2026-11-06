@@ -95,6 +95,28 @@ def _json_incomplete(text: str) -> bool:
     return in_str or depth > 0
 
 
+def dup_key(d: dict, key: str) -> str:
+    """The next free `key#n` (n >= 2) in `d`."""
+    n = 2
+    while f"{key}#{n}" in d:
+        n += 1
+    return f"{key}#{n}"
+
+
+def put_first(d: dict, key: str, value: Any) -> None:
+    """First-wins insert: a repeated key keeps its first value in place and the
+    later ones are stored as `key#2`, `key#3`, ... so no value is lost. Parsers
+    route the `#n` keys to `_residual`."""
+    d[key if key not in d else dup_key(d, key)] = value
+
+
+def _pairs_first_wins(pairs: list[tuple[str, Any]]) -> dict:
+    out: dict = {}
+    for k, v in pairs:
+        put_first(out, k, v)
+    return out
+
+
 def load_json(payload: bytes) -> Any:
     """Strict UTF-8 + JSON. A cut inside a multi-byte character or inside the
     JSON structure is `Truncated`; other failures are `Unparseable` or the
@@ -107,7 +129,7 @@ def load_json(payload: bytes) -> Any:
             raise Truncated("cut inside a UTF-8 sequence") from e
         raise
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=_pairs_first_wins)
     except json.JSONDecodeError as e:
         if text.lstrip()[:1] in ("{", "[") and _json_incomplete(text):
             raise Truncated(str(e)) from e

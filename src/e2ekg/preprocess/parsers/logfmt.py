@@ -2,7 +2,14 @@
 `=` or control characters is double-quoted with backslash escapes."""
 from collections.abc import Iterator
 
-from e2ekg.preprocess.parsers._base import Unparseable, decode, row, split_known, split_lines
+from e2ekg.preprocess.parsers._base import (
+    Unparseable,
+    decode,
+    put_first,
+    row,
+    split_known,
+    split_lines,
+)
 
 _ESC = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}
 
@@ -44,7 +51,7 @@ def parse_pairs(text: str) -> dict[str, str]:
             val, i = text[i:j], j
         if not key:
             raise Unparseable("logfmt: empty key")
-        out[key] = val
+        put_first(out, key, val)  # a repeated key lands as `key#n` (residual)
     return out
 
 

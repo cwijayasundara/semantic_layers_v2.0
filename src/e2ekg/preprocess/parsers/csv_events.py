@@ -4,7 +4,14 @@ are covered. `for_file` binds a parser to one file's header."""
 import csv
 from collections.abc import Iterator
 
-from e2ekg.preprocess.parsers._base import Unparseable, decode, first_str, row, split_lines
+from e2ekg.preprocess.parsers._base import (
+    Unparseable,
+    decode,
+    dup_key,
+    first_str,
+    row,
+    split_lines,
+)
 
 
 def _cells(text: str) -> list[str]:
@@ -47,9 +54,15 @@ class CsvEventsParser:
                        **base)
         if len(cells) > len(self.columns):
             raise Unparseable("csv: more cells than header columns")
-        fields = dict(zip(self.columns, cells, strict=False))
+        fields: dict[str, str] = {}
+        residual: dict[str, str] = {}
+        for col, cell in zip(self.columns, cells, strict=False):
+            if col in fields:  # repeated header column: first wins, the rest are `col#n`
+                residual[dup_key(residual, col)] = cell
+            else:
+                fields[col] = cell
         ts = next((fields[c] for c in self.ts_columns if fields.get(c)), None)
-        return row(ts, first_str(fields, ("app",)), fields, {}, row_kind="record",
+        return row(ts, first_str(fields, ("app",)), fields, residual, row_kind="record",
                    external_id=first_str(fields, self.id_columns), **base)
 
 

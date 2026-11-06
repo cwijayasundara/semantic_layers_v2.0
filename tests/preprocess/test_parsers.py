@@ -147,7 +147,7 @@ def test_otlp_explodes_spans_and_zipkin_is_one_span():
         b'{"traceId":"a","spanId":"b","startTimeUnixNano":"1","endTimeUnixNano":"2",'
         b'"zz":9}]}]}')
     assert odd["rows"][0]["_residual"] == {
-        "schemaUrl": "u", "resource.droppedAttributesCount": 1, "scopeSpans.schemaUrl": "v",
+        "resourceSpans.schemaUrl": "u", "resource.droppedAttributesCount": 1, "scopeSpans.schemaUrl": "v",
         "scope.version": "2", "zz": 9}
     z = _round("zipkin", {"traceId": "a" * 32, "id": "d" * 16, "parentId": "b" * 16,
                           "name": "get", "kind": "CLIENT", "timestamp": T, "duration": 12000,

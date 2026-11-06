@@ -5,22 +5,31 @@ import math
 import re
 from collections.abc import Iterator
 
-from e2ekg.preprocess.parsers._base import Unparseable, decode, first_str, row, split_lines
+from e2ekg.preprocess.parsers._base import (
+    Unparseable,
+    decode,
+    dup_key,
+    first_str,
+    row,
+    split_lines,
+)
 
 _NAME = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 _LABEL_ESC = {"\\": "\\", '"': '"', "n": "\n"}
 _SPECIAL = {"NaN": math.nan, "+Inf": math.inf, "-Inf": -math.inf, "Inf": math.inf}
 
 
-def _labels(text: str, i: int) -> tuple[dict[str, str], int]:
-    """Parse `{k="v",...}` starting at text[i] == "{"; returns (labels, index after })."""
+def _labels(text: str, i: int) -> tuple[dict[str, str], dict[str, str], int]:
+    """Parse `{k="v",...}` starting at text[i] == "{"; returns (labels, repeated
+    labels as `key#n`, index after }). The first value of a repeated label wins."""
     out: dict[str, str] = {}
+    dups: dict[str, str] = {}
     i += 1
     while True:
         while i < len(text) and text[i] in " ,":
             i += 1
         if i < len(text) and text[i] == "}":
-            return out, i + 1
+            return out, dups, i + 1
         m = _NAME.match(text, i)
         if not m or text[m.end():m.end() + 2] != '="':
             raise Unparseable("prom: bad label")
@@ -38,7 +47,11 @@ def _labels(text: str, i: int) -> tuple[dict[str, str], int]:
             else:
                 buf.append(c)
                 i += 1
-        out[key] = "".join(buf)
+        value = "".join(buf)
+        if key in out:
+            dups[dup_key(dups, key)] = value
+        else:
+            out[key] = value
 
 
 def _value(s: str) -> float:
@@ -73,9 +86,9 @@ class PromParser:
         m = _NAME.match(text)
         if not m:
             raise Unparseable("prom: not a sample line")
-        name, i, labels = m.group(), m.end(), {}
+        name, i, labels, dup_labels = m.group(), m.end(), {}, {}
         if text[i:i + 1] == "{":
-            labels, i = _labels(text, i)
+            labels, dup_labels, i = _labels(text, i)
         parts = text[i:].split()
         if len(parts) not in (1, 2) or (len(parts) == 2 and not parts[1].lstrip("-").isdigit()):
             raise Unparseable("prom: expected `value [timestamp]`")
@@ -83,7 +96,7 @@ class PromParser:
         fields = {"kind": "sample", "name": name, "labels": labels, "value": parts[0]}
         if t is not None:
             fields["t"] = t
-        return row(t, first_str(labels, ("app", "service")), fields, {},
+        return row(t, first_str(labels, ("app", "service")), fields, dup_labels,
                    **none | {"prom_kind": "sample", "metric": name, "labels": labels,
                              "value": _value(parts[0]), "value_raw": parts[0],
                              "instance": labels.get("instance")})
