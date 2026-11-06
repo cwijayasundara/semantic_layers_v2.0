@@ -232,7 +232,7 @@ def build_hero_reference(d=None) -> tuple[Graph, bool]:
            ops__frequency=Literal(Decimal(len(gw)) / Decimal(len(sev2))))
 
     # Causal chains: the answer-key chain and a weaker distractor.
-    def chain(links, conf):
+    def chain(links, conf, root):
         ch = b.node("ops", "chain", OPS.CausalChain, raw=False, ops__explains=live,
                     ops__confidence=Literal(conf))
         g.add((ch, PROV.wasDerivedFrom, live))
@@ -241,9 +241,16 @@ def build_hero_reference(d=None) -> tuple[Graph, bool]:
                         ops__onApplication=app_uri(app), ops__atTime=_ts(at),
                         ops__signalType=concept("signal_type", sig), ops__cites=live)
             g.add((ch, OPS.hasLink, ln))
-    chain([(x.signal, x.app, x.at_utc) for x in s.answer_key.causal_chain], Decimal("0.82"))
+            if k == 0:
+                g.add((ln, PROV.wasDerivedFrom, root))
+    def change(cid):
+        c = next(c for c in d.rendered_changes() if c.external_id == d.EXTERNAL_OF[cid])
+        return change_uri(s.name, c.kind, c.external_id)
+    chain([(x.signal, x.app, x.at_utc) for x in s.answer_key.causal_chain], Decimal("0.82"),
+          change(s.answer_key.root_cause_change_id))
     chain([("deployment", "api-gateway", pt(2026, 10, 14, 15, 18)),
-           ("incident", "homepage-graphql", live_i.opened)], Decimal("0.61"))
+           ("incident", "homepage-graphql", live_i.opened)], Decimal("0.61"),
+          change("chg-dep-0001"))
     return g, has_retractions
 
 

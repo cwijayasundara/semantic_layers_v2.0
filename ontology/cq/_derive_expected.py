@@ -61,6 +61,7 @@ S = hero_scenario()
 DEG = propagate(S.fault, S.edges, S.window)
 APPS = {a.id: a for a in S.catalog}
 LINKS = S.answer_key.causal_chain
+ROOT = S.answer_key.root_cause_change_id
 AS_OF = as_of_utc(S)
 EXTERNAL = external_ids(S)                       # external id -> scenario change id
 EXTERNAL_OF = {v: k for k, v in EXTERNAL.items()}  # scenario change id -> external id
@@ -284,8 +285,8 @@ REGRESSION = next(x for x in LINKS if x.signal == "metric_anomaly" and APPS[x.ap
 START, END = lit(S.window.start_utc), lit(S.window.end_utc)
 
 
-# Each returns (vars, rows, time literals the .rq must contain); `answers` is
-# the generator's _answers directory.
+# Each returns (vars, rows, time literals the .rq must contain), or for a constraint
+# check (vars, None, literals, constraints); `answers` is the generator's _answers directory.
 
 def cq01(answers):
     """Rendered incidents (history and live) with their CURRENT affected app,
@@ -361,9 +362,16 @@ def cq06(answers):
 
 
 def cq07(answers):
-    """Distinct apps of the answer-key chain with their catalog owner."""
-    apps = dict.fromkeys(x.app for x in LINKS)
-    return ["app", "team"], [{"app": a(x), "team": APPS[x].owner_team} for x in apps], [START, END]
+    """A constraint check, not rows (R38): the engine's path may be finer than the answer
+    key's summary chain. The top chain roots at the root cause's change node, every app
+    on it is one the fault's propagation degrades (with its catalog owner as team), and
+    it includes the fault's app and the symptom's."""
+    root = next(c for c in rendered_changes() if c.external_id == EXTERNAL_OF[ROOT])
+    degraded = sorted({d.app for d in DEG} | {S.fault.target})
+    return ["app", "team"], None, [START, END], {
+        "root": f"<{change_uri(S.name, root.kind, root.external_id)}>",
+        "apps_within": [{"app": a(x), "team": APPS[x].owner_team} for x in degraded],
+        "apps_include": [a(S.fault.target), a(LINKS[-1].app)]}
 
 
 def cq08(answers):
@@ -441,7 +449,7 @@ def derive(answers: Path = DEFAULT_ANSWERS, strict: bool = True) -> dict[str, di
     out = {}
     for rq in sorted(CQ_DIR.glob("*.rq")):
         try:
-            vars_, rows, literals = DERIVE[rq.name[:2]](answers)
+            vars_, rows, literals, *constraints = DERIVE[rq.name[:2]](answers)
         except GeneratorOutputMissing:
             if strict:
                 raise
@@ -449,8 +457,11 @@ def derive(answers: Path = DEFAULT_ANSWERS, strict: bool = True) -> dict[str, di
         text = rq.read_text()
         for x in literals:
             assert x in text, f"{rq.name}: time literal {x} drifted from the generator"
-        rows = sorted(rows, key=lambda r: json.dumps(r, sort_keys=True))
-        payload = {"question": cq_question(rq), "vars": vars_, "rows": rows}
+        payload = {"question": cq_question(rq), "vars": vars_}
+        if constraints:
+            payload["constraints"] = constraints[0]
+        else:
+            payload["rows"] = sorted(rows, key=lambda r: json.dumps(r, sort_keys=True))
         if rq.name[:2] in NEEDS_MANIFEST:
             payload["derived_from"] = (f"{S.name} seed {S.seed} scale "
                                        f"{manifest_scale(answers):g} manifest")
@@ -469,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for stem, payload in payloads.items():
         (CQ_DIR / f"{stem}.expected.json").write_text(json.dumps(payload, indent=2) + "\n")
-        print(f"{stem}: {len(payload['rows'])} rows")
+        print(f"{stem}: {len(payload['rows'])} rows" if "rows" in payload else f"{stem}: constraints")
     return 0
 
 

@@ -4,26 +4,53 @@
     "app",
     "team"
   ],
-  "rows": [
-    {
-      "app": "<https://kg.local/app/application/client-tv>",
-      "team": "Team Devices"
-    },
-    {
-      "app": "<https://kg.local/app/application/homepage-graphql>",
-      "team": "Team Discovery"
-    },
-    {
-      "app": "<https://kg.local/app/application/lolomo-svc>",
-      "team": "Team Discovery"
-    },
-    {
-      "app": "<https://kg.local/app/application/title-batch-loader>",
-      "team": "Team Content Platform"
-    },
-    {
-      "app": "<https://kg.local/app/application/title-metadata-svc>",
-      "team": "Team Content Platform"
-    }
-  ]
+  "constraints": {
+    "root": "<https://kg.local/chg/config_change/hero/fpc-3be29b76c7f9>",
+    "apps_within": [
+      {
+        "app": "<https://kg.local/app/application/client-android>",
+        "team": "Team Devices"
+      },
+      {
+        "app": "<https://kg.local/app/application/client-ios>",
+        "team": "Team Devices"
+      },
+      {
+        "app": "<https://kg.local/app/application/client-tv>",
+        "team": "Team Devices"
+      },
+      {
+        "app": "<https://kg.local/app/application/client-web>",
+        "team": "Team Devices"
+      },
+      {
+        "app": "<https://kg.local/app/application/edge-gateway>",
+        "team": "Team Edge"
+      },
+      {
+        "app": "<https://kg.local/app/application/homepage-graphql>",
+        "team": "Team Discovery"
+      },
+      {
+        "app": "<https://kg.local/app/application/lolomo-svc>",
+        "team": "Team Discovery"
+      },
+      {
+        "app": "<https://kg.local/app/application/row-ranker>",
+        "team": "Team Personalization"
+      },
+      {
+        "app": "<https://kg.local/app/application/title-batch-loader>",
+        "team": "Team Content Platform"
+      },
+      {
+        "app": "<https://kg.local/app/application/title-metadata-svc>",
+        "team": "Team Content Platform"
+      }
+    ],
+    "apps_include": [
+      "<https://kg.local/app/application/title-metadata-svc>",
+      "<https://kg.local/app/application/homepage-graphql>"
+    ]
+  }
 }

@@ -11,7 +11,8 @@ A CQ file is SPARQL whose first line is `# <natural-language question>`;
 its `# requires: <enricher>[, ...]` line names the enrichers that must have
 run for it to be answerable (names from ENRICHER_NAMES). A CQ requiring a
 LATER_STAGES enricher is gated until that stage exists. Its answer key sits beside it as `<name>.expected.json`:
-`{"question", "vars", "rows": [{var: value}]}`. Values are encoded as
+`{"question", "vars", "rows": [{var: value}]}`, or `"constraints"` in place of
+`"rows"` for a CQ whose answer is a property, not a set (`cq_mismatch`). Values are encoded as
 `"<iri>"` for IRIs, the lexical form for literals (dateTimes normalized to
 UTC `...Z`, numbers canonicalized), and null for unbound. Results compare as
 a set of rows.
@@ -211,7 +212,42 @@ def run_cq(store, path: Path) -> frozenset[Row]:
     return frozenset(_row({n: encode(sol[n]) for n in names}) for sol in res)
 
 
+def _payload(path: Path) -> dict:
+    return json.loads(Path(path).with_suffix(".expected.json").read_text())
+
+
 def expected(path: Path) -> frozenset[Row]:
-    payload = json.loads(Path(path).with_suffix(".expected.json").read_text())
+    payload = _payload(path)
+    if "rows" not in payload:
+        raise ValueError(f"{Path(path).name} is a constraint check; use cq_mismatch")
     vars_ = payload["vars"]
     return frozenset(_row({v: r.get(v) for v in vars_}) for r in payload["rows"])
+
+
+_TOP_CHAIN_ROOT = """PREFIX ops: <https://kg.local/ops#> PREFIX prov: <http://www.w3.org/ns/prov#>
+SELECT ?root WHERE { ?chain a ops:CausalChain ; ops:confidence ?c ; ops:hasLink ?l .
+  ?l ops:linkOrder 0 ; prov:wasDerivedFrom ?root } ORDER BY DESC(?c) LIMIT 1"""
+
+
+def cq_mismatch(store, path: Path) -> str | None:
+    """None when the store answers the CQ: its rows are the expected rows, or, for a
+    constraint check (R38, CQ07), the top chain's root is `root`, every row is one of
+    `apps_within` (app with its owner as team) and the apps include `apps_include`."""
+    rows = run_cq(store, path)
+    c = _payload(path).get("constraints")
+    if c is None:
+        want = expected(path)
+        return None if rows == want else f"rows {sorted(rows)} != expected {sorted(want)}"
+    got = [dict(r) for r in rows]
+    roots = [encode(sol["root"]) for sol in _to_oxigraph(store).query(
+        _TOP_CHAIN_ROOT, use_default_graph_as_union=True)]
+    problems = []
+    if roots != [c["root"]]:
+        problems.append(f"top chain root {roots} != {c['root']}")
+    within = [r for r in got if r not in c["apps_within"]]
+    if within:
+        problems.append(f"rows outside the degraded apps or their owners: {within}")
+    missing = set(c["apps_include"]) - {r["app"] for r in got}
+    if missing:
+        problems.append(f"chain lacks {sorted(missing)}")
+    return "; ".join(problems) or None

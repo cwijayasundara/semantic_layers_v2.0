@@ -19,20 +19,15 @@ from rdflib import namespace as rdfns  # not `import XSD`: pytest probes module 
 from rdflib.namespace import RDF
 
 from e2ekg.graph.shacl import (
-    CQ_DIR, ENRICHER_NAMES, LATER_STAGES, cq_question, cq_requires, expected, run_cq, validate,
+    CQ_DIR, ENRICHER_NAMES, LATER_STAGES, cq_mismatch, cq_question, cq_requires, expected, run_cq,
+    validate,
 )
 from e2ekg.graph.store import Store
 from e2ekg.graph.uris import NS, app_uri, change_uri
 
 OPS = NS["ops"]
 CQS = sorted(CQ_DIR.glob("*.rq"))
-# CQ07 expects the apps of the answer key's 8-link summary chain (TMS, TBL, lolomo,
-# client-tv, homepage-graphql). The engine's top chain is the finer propagation path it
-# finds (row-ranker and edge-gateway in, no client link), so the two disagree on
-# granularity, not on the cause. Pending a ruling on the expectation (task-13 report).
-_PENDING = {"07-causal-chain-owners": "CQ07 chain granularity: answer-key summary vs engine path"}
-CASES = [pytest.param(p, marks=pytest.mark.xfail(strict=True, reason=_PENDING[p.stem]))
-         if p.stem in _PENDING else p for p in CQS]
+ROW_CQS = [p for p in CQS if "rows" in json.loads(p.with_suffix(".expected.json").read_text())]
 
 
 def _gate(cq: Path) -> None:
@@ -52,11 +47,10 @@ def fixture_expected(harvested_hero, derive_module, tmp_path_factory) -> Path:
     return d
 
 
-@pytest.mark.parametrize("cq", CASES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
 def test_cq(cq, harvested_hero_store, fixture_expected):
     _gate(cq)
-    mine = fixture_expected / cq.name
-    assert run_cq(harvested_hero_store, mine) == expected(mine)
+    assert cq_mismatch(harvested_hero_store, fixture_expected / cq.name) is None
 
 
 FULL_STORE = Path(os.environ.get("E2EKG_FULL_STORE",
@@ -72,10 +66,10 @@ def full_scale_store():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("cq", CASES, ids=lambda p: p.stem)
+@pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
 def test_cq_full_scale(cq, full_scale_store):
     _gate(cq)
-    assert run_cq(full_scale_store, cq) == expected(cq)
+    assert cq_mismatch(full_scale_store, cq) is None
 
 
 def test_cq05_held_is_a_boolean_that_compares_as_the_string_false(harvested_hero_store,
@@ -95,7 +89,8 @@ def test_fifteen_cqs_each_with_question_and_expected_file():
         assert p.read_text().startswith("# "), p.name
         assert cq_question(p).endswith("?"), p.name
         assert p.with_suffix(".expected.json").exists(), p.name
-        assert expected(p), f"{p.name} expects no rows"
+        assert p not in ROW_CQS or expected(p), f"{p.name} expects no rows"
+    assert [p.stem for p in CQS if p not in ROW_CQS] == ["07-causal-chain-owners"]   # R38
 
 
 def test_cq01_is_the_posts_question():
@@ -131,7 +126,7 @@ def test_expected_vars_match_select_vars():
 
 
 def test_no_cq_projects_hash_derived_nodes_or_scenario_change_ids():
-    for p in CQS:
+    for p in ROW_CQS:
         for row in expected(p):
             for _, v in row:
                 if isinstance(v, str) and v.startswith("<"):
@@ -157,7 +152,7 @@ def test_change_rows_are_external_ids_of_the_answer_key(derive_module):
 
 def test_spot_values_from_the_generator(derive_module):
     by = {p.stem[:2]: p for p in CQS}
-    rows = {k: [dict(r) for r in expected(p)] for k, p in by.items()}
+    rows = {k: [dict(r) for r in expected(p)] for k, p in by.items() if p in ROW_CQS}
     assert rows["04"] == [{"handle": "priya.nair", "pastApp": f"<{app_uri('lolomo-svc')}>"}]
     assert rows["13"] == [{"incidentId": "INC-5377", "previous": f"<{app_uri('api-gateway')}>",
                            "current": f"<{app_uri('homepage-graphql')}>"}]
@@ -208,7 +203,7 @@ def test_cq_on_reference_abox(cq, hero_reference_built):
     g, has_retractions = hero_reference_built
     if cq.name.startswith("06-") and not has_retractions:
         pytest.skip("generator manifest missing: no retractions in the reference ABox")
-    assert run_cq(g, cq) == expected(cq)
+    assert cq_mismatch(g, cq) is None
 
 
 def test_reference_abox_is_shacl_clean(hero_reference):
@@ -299,3 +294,18 @@ def test_runner_detects_a_wrong_answer(tmp_path):
         g.add(t)
     q = _write(tmp_path, _ROWS[:1])
     assert run_cq(g, q) != expected(q)
+
+
+def test_cq07_rejects_a_top_chain_rooted_at_the_trap(hero_reference_built):
+    g, _ = hero_reference_built
+    trap = Graph()
+    for t in g:
+        trap.add(t)
+    chains = sorted(trap.subjects(RDF.type, OPS.CausalChain),
+                    key=lambda c: float(trap.value(c, OPS.confidence)))
+    weak, _ = chains
+    trap.set((weak, OPS.confidence, Literal(0.95)))
+    cq = next(p for p in CQS if p.name.startswith("07-"))
+    problems = cq_mismatch(trap, cq)
+    assert cq_mismatch(g, cq) is None
+    assert "top chain root" in problems and "api-gateway" in problems
