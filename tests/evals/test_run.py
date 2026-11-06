@@ -1,13 +1,9 @@
 """The eval runner: its plan, its resume, its arms and its scoring, on fixture stores and fake
 models. No network."""
-import json
-from pathlib import Path
-
 import pytest
 from agent_helpers import fake_tool_model
 from langchain_core.messages import AIMessage, ToolMessage
 
-from e2ekg.agent.autorca import FailedRCA
 from e2ekg.agent.report import RCAReport
 from e2ekg.evals import run as ev
 from e2ekg.evals.run import (
