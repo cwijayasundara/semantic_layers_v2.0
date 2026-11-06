@@ -14,10 +14,16 @@ p50/p99 duration and error rate. Its rows partition the spans table, so:
     with at least 3 errors). The onset threshold holds for the whole run, which
     ends after more than 2 minutes back under it. Minutes with fewer than 3
     spans never start or extend a run. A slow_trace window also needs a
-    second minute over the threshold or at least 20 spans. ops:magnitude is the detector's
-    own statistic at its peak: for slow_trace the p50 over the baseline (none over a 0 ms
-    baseline), for failed_trace the excess error rate in binomial sigmas; trc:p50Ms / trc:p99Ms are the peak per-minute values; the
-    selector covers exactly the window's minutes, so ops:count = its spans.
+    second minute over the threshold or at least 20 spans. trc:p50Ms / trc:p99Ms are
+    the peak per-minute values; the selector covers exactly the window's minutes, so
+    ops:count = its spans.
+  * ops:magnitude is the detector's own statistic at its peak, so its unit depends on
+    the signal type:
+      slow_trace    a ratio, peak per-minute p50 / trailing-hour median (none over a
+                    0 ms baseline). The detector fires at 2.
+      failed_trace  sigmas, the peak (rate - p0) / sqrt(p0 (1 - p0) / n) over minutes
+                    with at least 3 spans, p0 the trailing-hour pooled rate (at least 0.005). The
+                    detector fires at 6.
 e2e_bottleneck (the critical-path edge of one request) needs per-trace
 analysis and is not emitted."""
 from datetime import timedelta
