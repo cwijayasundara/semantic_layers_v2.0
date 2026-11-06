@@ -93,6 +93,12 @@ def _add_preprocess(sub) -> None:
     p.set_defaults(func=_cmd_preprocess)
 
 
+# A few unclassified messages are expected (a failed batch falls back to single calls). The
+# hero fixture classifies every message and its test requires 95%; past 5% the cause is
+# systemic (bad key, rate limiting) and the chat tables are not evidence to reason from.
+MAX_UNCLASSIFIED_FRAC = 0.05
+
+
 def _cmd_ledger(args: argparse.Namespace) -> int:
     import json
 
@@ -138,16 +144,21 @@ def _cmd_ledger(args: argparse.Namespace) -> int:
         chat = proc / "derived" / "chat_messages.parquet"
         if not chat.exists():
             msg = "chat outputs missing (run preprocess with --llm scripted|fireworks)"
-            if args.require_chat:
-                problems.append(msg)
-            else:
+            if args.allow_missing_chat:
                 print(f"{name}: WARN {msg}")
+            else:
+                problems.append(msg)
         else:
             n_slack = pl.scan_parquet(proc / "slack.parquet").select(pl.len()).collect().item()
             n_chat = pl.scan_parquet(chat).select(pl.len()).collect().item()
-            print(f"{name}: chat messages {n_chat}/{n_slack}")
+            n_unc = pl.scan_parquet(chat).filter(pl.col("status") == "unclassified").select(
+                pl.len()).collect().item()
+            print(f"{name}: chat messages {n_chat}/{n_slack}, unclassified {n_unc}/{n_chat}")
             if n_chat != n_slack:
                 problems.append(f"chat_messages has {n_chat} rows for {n_slack} slack rows")
+            if n_unc > MAX_UNCLASSIFIED_FRAC * n_chat:
+                problems.append(f"{n_unc}/{n_chat} chat messages unclassified "
+                                f"(limit {MAX_UNCLASSIFIED_FRAC:.0%})")
         print(f"{name}: {'FAIL ' + '; '.join(problems) if problems else 'OK'}", flush=True)
         bad += bool(problems)
     return 1 if bad else 0
@@ -159,8 +170,9 @@ def _add_ledger(sub) -> None:
     p.add_argument("--out", default="data/processed", help="processed root")
     p.add_argument("--raw", default="data/raw", help="raw root (coverage is skipped if absent)")
     p.add_argument("--proc", default=None, help="one processed scenario directory")
-    p.add_argument("--require-chat", action="store_true",
-                   help="fail (not just warn) when chat extraction outputs are missing")
+    p.add_argument("--allow-missing-chat", action="store_true",
+                   help="warn instead of fail when chat extraction outputs are missing "
+                        "(a preprocess run with --llm none)")
     p.set_defaults(func=_cmd_ledger)
 
 

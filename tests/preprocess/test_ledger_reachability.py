@@ -94,12 +94,42 @@ def test_derived_passes_keep_file_row_order(preprocessed_hero):
         assert bad.height == 0, t
 
 
-def test_ledger_warns_then_fails_when_chat_outputs_are_missing(proc_copy):
+def test_ledger_fails_by_default_when_chat_outputs_are_missing(proc_copy):
     (proc_copy / "derived" / "chat_messages.parquet").unlink()
     p = run_cli("ledger", "--proc", str(proc_copy))
+    assert p.returncode != 0 and "FAIL" in p.stdout and "chat outputs missing" in p.stdout
+
+
+def test_ledger_allow_missing_chat_downgrades_to_a_warning(proc_copy):
+    (proc_copy / "derived" / "chat_messages.parquet").unlink()
+    p = run_cli("ledger", "--proc", str(proc_copy), "--allow-missing-chat")
     assert p.returncode == 0 and "WARN chat outputs missing" in p.stdout
-    p = run_cli("ledger", "--proc", str(proc_copy), "--require-chat")
-    assert p.returncode != 0 and "FAIL" in p.stdout
+
+
+def _set_unclassified(proc_copy, n):
+    f = proc_copy / "derived" / "chat_messages.parquet"
+    df = pl.read_parquet(f)
+    flag = pl.Series([i < n for i in range(df.height)])
+    df.with_columns(
+        status=pl.when(flag).then(pl.lit("unclassified")).otherwise(pl.col("status")),
+        category=pl.when(flag).then(pl.lit("unclassified")).otherwise(pl.col("category"))
+    ).write_parquet(f)
+    return df.height
+
+
+def test_ledger_fails_when_most_chat_rows_are_unclassified(proc_copy):
+    """A dead API key leaves every message unclassified; row counts still match."""
+    total = _set_unclassified(proc_copy, 1_000_000)
+    p = run_cli("ledger", "--proc", str(proc_copy))
+    assert p.returncode != 0 and f"unclassified {total}/{total}" in p.stdout
+    assert "FAIL" in p.stdout
+
+
+def test_ledger_tolerates_a_few_unclassified_chat_rows_and_reports_them(proc_copy):
+    total = _set_unclassified(proc_copy, 1)
+    p = run_cli("ledger", "--proc", str(proc_copy))
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert f"unclassified 1/{total}" in p.stdout
 
 
 def test_ledger_fails_when_chat_rows_are_short(proc_copy):
