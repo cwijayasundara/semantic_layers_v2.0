@@ -60,6 +60,18 @@ def test_skewed_host_does_not_reorder_chain(harvested_hero_signals):
     assert links.index("metric_anomaly") < links.index("log_error")
 
 
+def test_two_unexplained_blips_on_the_tms_cache_do_not_unseat_the_true_root(
+        harvested_hero_signals, uri_of):
+    signals, edges, symptom = harvested_hero_signals
+    cfg = next(s for s in signals if s.uri == uri_of("chg-cfg-0001"))
+    blips = [Signal("urn:blip-1", "metric_anomaly", "evcache-titles",
+                    cfg.at_utc - timedelta(minutes=1), 0.5),
+             Signal("urn:blip-2", "log_error", "evcache-titles",
+                    cfg.at_utc + timedelta(minutes=6), 0.5)]
+    chains = correlate(signals + blips, edges, symptom)
+    assert chains[0].links[0].uri == uri_of("chg-cfg-0001")
+
+
 def test_history_priors_do_not_flip_the_hero(harvested_hero_signals, harvested_hero_as_of, uri_of):
     pri = priors_with_history(harvested_hero_as_of.store)
     assert pri[("deployment", "log_error")] > PRIORS[("deployment", "log_error")]
@@ -176,15 +188,27 @@ def test_an_incident_is_caused_only_by_the_alert_its_page_names():
 
 
 def test_a_change_landing_after_the_cascade_began_is_explained_away():
+    cause = sig("cause", "config_change", "svc", -2)
     first = sig("first", "metric_anomaly", "svc", 0)
     mid = sig("mid", "metric_anomaly", "mid", 2)
     late = sig("late", "experiment", "mid", 3)
     effect = sig("effect", "log_error", "edge", 6)
-    signals = [first, mid, late, effect]
+    signals = [cause, first, mid, late, effect]
     assert _linked(signals, mid, effect) and not _linked(signals, late, effect)
     assert _linked(signals, late, effect, gate=False)
     early = sig("early", "experiment", "mid", 1)
     assert _linked([early, mid, effect], early, effect)
+
+
+def test_an_unexplained_blip_before_a_change_does_not_explain_it_away():
+    blip = sig("blip", "metric_anomaly", "svc", -1)            # no change behind it
+    cfg = sig("cfg", "config_change", "svc", 0)
+    lat = sig("lat", "log_error", "svc", 3)
+    effect = sig("effect", "metric_anomaly", "edge", 5)
+    blip2 = sig("blip2", "log_error", "mid", 2)
+    signals = [blip, blip2, cfg, lat, effect]
+    assert _linked(signals, blip, lat) and _linked(signals, cfg, lat)
+    assert _linked(signals, cfg, effect)
 
 
 def test_order_is_read_on_the_detectors_minute_grid():

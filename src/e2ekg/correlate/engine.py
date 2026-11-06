@@ -17,8 +17,10 @@ The candidate-link graph has an edge a -> b ("a may have caused b") when
     type on one app are one condition developing, not cause and effect;
   * with the topology gate on (R9, R40), b is on a.app, or b.app calls a.app
     transitively (an effect travels up the callers), alerts included; and a change a
-    may cause b only if b's cascade had not begun before a: no telemetry ancestor of b
-    (through the gated telemetry links) is older than a. An effect whose degradation
+    may cause b only if b's cascade had not begun before a: no rooted telemetry
+    ancestor of b (one some change reaches through admissible links, R42) began in an
+    earlier minute than a. An unexplained background blip is no cascade and vetoes
+    nothing; an earlier change's cascade vetoes a later change. An effect whose degradation
     was already under way when the change landed is explained by what came before it
     (explaining away); a red herring is a change that lands while the incident is
     already unfolding. Reachability alone cannot reject it: the edge and the clients
@@ -173,15 +175,18 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
             if s > 0:
                 causes[b].append((a, s))
     if gate:
-        began: dict[Signal, datetime] = {}         # b's earliest telemetry ancestor
+        rooted: set[Signal] = set()                # reachable from some change
+        began: dict[Signal, datetime] = {}         # b's earliest rooted telemetry ancestor
         for b in ordered:
             lineage = [min(a.at_utc, began.get(a, a.at_utc)) for a, _ in causes.get(b, ())
-                       if a.type not in CHANGE_TYPES]
+                       if a.type not in CHANGE_TYPES and a in rooted]
             if lineage:
                 began[b] = min(lineage)
                 causes[b] = [(a, s) for a, s in causes[b]
                              if a.type not in CHANGE_TYPES
                              or _minute(a.at_utc) <= _minute(began[b])]
+            if b.type in CHANGE_TYPES or any(a in rooted for a, _ in causes.get(b, ())):
+                rooted.add(b)
     return causes
 
 
