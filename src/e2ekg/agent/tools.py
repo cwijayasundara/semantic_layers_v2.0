@@ -41,7 +41,7 @@ from langchain_core.tools import BaseTool, tool
 from rdflib import Graph, Literal as RdfLiteral, URIRef
 from rdflib.namespace import RDF, RDFS
 
-from e2ekg.agent.refute import Investigation
+from e2ekg.agent.refute import Call, Investigation
 from e2ekg.agent.report import FindingIn
 from e2ekg.correlate.engine import CHANGE_TYPES, correlate
 from e2ekg.graph.enricher import dec, node
@@ -465,8 +465,13 @@ def refutation_check(env: Env, alert_id: str, candidate_uris: list[str]) -> str:
     signals, edges, _ = chain_inputs(env.store, sym["symptom_uri"])
     kinds = {_app_of(r["a"]): r["k"]
              for r in env.store.query(PFX + "SELECT ?a ?k WHERE { ?a ops:appKind ?k }")}
+    calls = [Call(_app_of(r["caller"]), _app_of(r["callee"]), datetime.fromisoformat(r["t"]))
+             for r in env.store.query(PFX + """SELECT ?caller ?callee ?t ?type WHERE {
+                 ?s a ops:TraceEdgeFingerprint ; ops:signalType ?type ; ops:atTime ?t ;
+                    ops:onApplication ?callee ; trc:caller ?caller }""")
+             if _tail(r["type"]) in ("slow_trace", "failed_trace")]
     filed = (sym["incident"] or {}).get("affects", [])
-    inv = Investigation(signals, edges, kinds, sym["alert"]["uri"], filed,
+    inv = Investigation(signals, edges, calls, kinds, sym["alert"]["uri"], filed,
                         correlate(signals, edges, sym["symptom_uri"]))
     changes = {s.uri for s in signals if s.type in CHANGE_TYPES}
     asked = [u.strip() for u in candidate_uris]
@@ -876,9 +881,10 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         the alert app depends on, a client that reaches it, or an app the incident was filed
         against, plus the changes you name. Each must pass: closure (the alert app depends on its app),
         timing (it landed before the onset, skew-corrected time), clients (every client of
-        the alert app depends on its app), dependencies (nothing its app depends on was
-        already degrading when it landed), origin (not autoscaling, not a commit a later
-        deployment shipped), effect (its app shows a change within 20 min). Returns
+        the alert app depends on its app), already_degrading (neither its app nor anything
+        it depends on was degrading before it landed), origin (not autoscaling, not a commit
+        a later deployment shipped), propagation (slow or failed calls, from it on, lead
+        from its app up to the alert app). Returns
         {symptom{alert,app,alert_at,onset,onset_uri,clients,filed_against,filed_in_closure},
         candidates[{uri,kind,app,at,survives,refuted_by,supported_by,chain_conf}]},
         survivors first.

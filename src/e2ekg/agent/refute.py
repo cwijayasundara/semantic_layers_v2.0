@@ -1,7 +1,7 @@
 """Refutation: the tests a candidate root cause must survive, computed from the signals and
 topology the correlation engine reads, never from a model's judgment.
 
-    inv = Investigation(signals, edges, app_kinds, alert_uri, filed_against, chains)
+    inv = Investigation(signals, edges, calls, app_kinds, alert_uri, filed_against, chains)
     for v in inv.judge(inv.candidates(extra_uris)): v.survives, v.checks
 
 The symptom is the ALERT's application degrading: what was observed. The apps an incident
@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 from e2ekg.correlate.engine import CHANGE_TYPES, TELEMETRY, WINDOW_S, Chain, Signal, Topology
 
 LOOKBACK = timedelta(hours=1)          # candidates: changes this long before the onset
-EFFECT = timedelta(seconds=2 * WINDOW_S)
 EPISODE_GAP = timedelta(seconds=WINDOW_S)
 
 
@@ -25,6 +24,14 @@ def _minute(t: datetime) -> datetime:
 
 def _z(t: datetime) -> str:
     return t.strftime("%Y-%m-%dT%H:%MZ" if t.second == t.microsecond == 0 else "%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass(frozen=True)
+class Call:
+    """A caller -> callee edge whose traces turned slow or failed at `at`."""
+    caller: str
+    callee: str
+    at: datetime
 
 
 @dataclass(frozen=True)
@@ -47,10 +54,11 @@ class Verdict:
 
 class Investigation:
     def __init__(self, signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
-                 app_kinds: dict[str, str], alert_uri: str, filed_against: Sequence[str],
-                 chains: Sequence[Chain]):
+                 calls: Iterable[Call], app_kinds: dict[str, str], alert_uri: str,
+                 filed_against: Sequence[str], chains: Sequence[Chain]):
         self.signals = sorted(signals, key=lambda s: (s.at_utc, s.uri))
         self.topo = Topology(edges)
+        self.calls = sorted(calls, key=lambda c: (c.at, c.caller, c.callee))
         self.chains = chains
         self.filed_against = tuple(sorted(filed_against))
         alert = next((s for s in self.signals if s.uri == alert_uri), None)
@@ -129,15 +137,17 @@ def clients(inv: Investigation, c: Signal) -> Check:
     return Check("clients", True, f"every client of {inv.alert.app} depends on {c.app}")
 
 
-def dependencies(inv: Investigation, c: Signal) -> Check:
-    below = [s for s in inv.telemetry(lambda app: app != c.app and inv.depends(c.app, app),
-                                      c.at_utc - EPISODE_GAP, c.at_utc)
-             if _minute(s.at_utc) < _minute(c.at_utc)]
-    if below:
-        s = below[0]
-        return Check("dependencies", False, f"{s.app}, which {c.app} depends on, was already "
-                                            f"degrading ({s.type}) at {_z(s.at_utc)}")
-    return Check("dependencies", True, f"nothing {c.app} depends on was degrading when it landed")
+def already_degrading(inv: Investigation, c: Signal) -> Check:
+    before = [s for s in inv.telemetry(lambda app: inv.depends(c.app, app),
+                                       c.at_utc - EPISODE_GAP, c.at_utc)
+              if _minute(s.at_utc) < _minute(c.at_utc)]
+    if before:
+        s = before[0]
+        whose = c.app if s.app == c.app else f"{s.app}, which {c.app} depends on,"
+        return Check("already_degrading", False,
+                     f"{whose} was already degrading ({s.type}) at {_z(s.at_utc)}")
+    return Check("already_degrading", True,
+                 f"neither {c.app} nor anything it depends on was degrading when it landed")
 
 
 def origin(inv: Investigation, c: Signal) -> Check:
@@ -152,15 +162,26 @@ def origin(inv: Investigation, c: Signal) -> Check:
     return Check("origin", True, "an originating change")
 
 
-def effect(inv: Investigation, c: Signal) -> Check:
-    seen = [s for s in inv.signals if s.app == c.app and c.at_utc <= s.at_utc <= c.at_utc + EFFECT
-            and (s.type in TELEMETRY or (s.type == "autoscaling" and s.uri != c.uri))]
-    if seen:
-        s = seen[0]
-        return Check("effect", True, f"{c.app} shows {s.type} at {_z(s.at_utc)}")
-    return Check("effect", False, f"nothing on {c.app} changed within "
-                                  f"{EFFECT.seconds // 60} min of it")
+def propagation(inv: Investigation, c: Signal) -> Check:
+    """Slow or failed calls, from the change on, lead from its app up to the alert app."""
+    lo, hi, goal = _minute(c.at_utc), inv.alert.at_utc, inv.alert.app
+    via: dict[str, str | None] = {c.app: None}
+    frontier = [c.app]
+    while frontier and goal not in via:
+        reached = set(frontier)
+        frontier = []
+        for k in inv.calls:
+            if k.callee in reached and k.caller not in via and lo <= k.at <= hi:
+                via[k.caller] = k.callee
+                frontier.append(k.caller)
+    if goal not in via:
+        return Check("propagation", False, f"no slow or failed calls lead from {c.app} to {goal}")
+    path, app = [], goal
+    while app is not None:
+        path.append(app)
+        app = via[app]
+    return Check("propagation", True, f"degraded calls lead {' <- '.join(path)}")
 
 
 CHECKS: tuple[Callable[[Investigation, Signal], Check], ...] = (
-    closure, timing, clients, dependencies, origin, effect)
+    closure, timing, clients, already_degrading, origin, propagation)

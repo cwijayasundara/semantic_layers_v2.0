@@ -47,7 +47,7 @@ def test_nothing_else_survives(checked):
 @pytest.mark.parametrize("herring,check", [("chg-dep-0001", "closure"),
                                            ("chg-rel-0001", "closure"),
                                            ("chg-rel-0001", "clients"),
-                                           ("chg-exp-0001", "dependencies")])
+                                           ("chg-exp-0001", "already_degrading")])
 def test_each_red_herring_is_refuted_for_its_reason(checked, herring, check):
     out, uri = checked
     row = _row(out, uri[herring])
