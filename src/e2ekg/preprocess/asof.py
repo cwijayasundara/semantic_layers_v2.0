@@ -22,15 +22,19 @@ observable then, so a store harvested through it cannot hold a later fact.
 An unknown table name raises: a table without a rule here cannot reach the
 as-of store by omission.
 
-`live_cutoff(proc)` finds the cutoff from the processed tables alone (never
-`_answers`, R5): the live incident is the one created last, its alert the one
-behind the last page triggered at or before it opened, and the cutoff that
-alert's first firing + 30 min."""
+`live_symptom(proc)` names what the live RCA investigates, from the processed
+tables alone (never `_answers`, R5; R39): the latest incident created inside the
+scenario window (the span the telemetry covers), or, when none opened there, the
+window's highest-severity alert (ties: the earliest to fire). An incident created
+before the window is history, never the symptom. `live_cutoff(proc)` is that
+symptom's alert + 30 min: an incident's alert is the one named by its opening page
+(`opening_page`: the last page triggered at or before it opened)."""
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import polars as pl
 
@@ -41,13 +45,20 @@ from e2ekg.preprocess.metrics_clean import clean_metrics, metric_anomalies
 from e2ekg.preprocess.traces_repair import aggregate_edges
 
 AS_OF_AFTER_ALERT = timedelta(minutes=30)     # R21
+ALERT_SEVERITY = ("critical", "warning", "info")     # highest first
+
+
+@dataclass(frozen=True)
+class Symptom:
+    kind: Literal["incident", "alert"]
+    id: str                   # incident.io id or Radar alert id
 
 
 @dataclass(frozen=True)
 class Cutoff:
     as_of: datetime
-    incident_id: str
-    alert_id: str | None      # None: the page named no alert with a firing record
+    symptom: Symptom
+    alert_id: str | None      # the symptom's alert; None: its page named no alert with a firing record
     alert_at: datetime
 
 
@@ -136,26 +147,60 @@ def scan(proc: Path, name: str, as_of: datetime | None = None) -> pl.LazyFrame:
     return _ROWS[name](Path(proc), as_of)
 
 
-def live_cutoff(proc: Path) -> Cutoff:
+def _window(proc: Path) -> tuple[datetime, datetime]:
+    return scan(proc, "logs").select(pl.col("ts_utc").min().alias("lo"),
+                                     pl.col("ts_utc").max().alias("hi")).collect().row(0)
+
+
+def _first_firings(proc: Path) -> pl.DataFrame:
+    """alert_id, severity, at: each alert's first firing record."""
+    return (scan(proc, "alerts").filter((pl.col("state") == "firing") & pl.col("ts_utc").is_not_null())
+            .sort("ts_utc", "raw_id").group_by("alert_id", maintain_order=True)
+            .agg(pl.col("severity").first(), pl.col("ts_utc").first().alias("at")).collect())
+
+
+def opening_page(pages: list[dict], opened: datetime) -> dict | None:
+    """The page that opened an incident: of the time-sorted triggered page records
+    ({"ts_utc", ...}), the last at or before `opened`."""
+    return next((p for p in reversed(pages) if p["ts_utc"] <= opened), None)
+
+
+def live_symptom(proc: Path) -> Symptom | None:
+    lo, hi = _window(proc)
     created = (scan(proc, "incidents").filter(
-        (pl.col("event") == "incident.created") & pl.col("ts_utc").is_not_null())
+        (pl.col("event") == "incident.created") & pl.col("ts_utc").is_between(lo, hi))
         .sort("ts_utc", "raw_id").collect())
-    if created.height == 0:
-        raise ValueError(f"{proc}: no incident.created record to take the cutoff from")
-    live = created.row(-1, named=True)
-    pages = (scan(proc, "pages").filter(
-        (pl.col("status") == "triggered") & (pl.col("ts_utc") <= live["ts_utc"]))
-        .sort("ts_utc", "raw_id").collect())
-    if pages.height == 0:
-        raise ValueError(f"{proc}: no page before incident {live['incident_id']}")
-    page = pages.row(-1, named=True)
+    if created.height:
+        return Symptom("incident", created["incident_id"][-1])
+    rank = {s: i for i, s in enumerate(ALERT_SEVERITY)}
+    alerts = [r for r in _first_firings(proc).iter_rows(named=True) if lo <= r["at"] <= hi]
+    if not alerts:
+        return None
+    top = min(alerts, key=lambda r: (rank.get(r["severity"], len(rank)), r["at"], r["alert_id"]))
+    return Symptom("alert", top["alert_id"])
+
+
+def live_cutoff(proc: Path) -> Cutoff:
+    symptom = live_symptom(proc)
+    if symptom is None:
+        raise ValueError(f"{proc}: no incident or alert in the window to take the cutoff from")
+    firing = dict(_first_firings(proc).select("alert_id", "at").iter_rows())
+    if symptom.kind == "alert":
+        return Cutoff(as_of=firing[symptom.id] + AS_OF_AFTER_ALERT, symptom=symptom,
+                      alert_id=symptom.id, alert_at=firing[symptom.id])
+    opened = (scan(proc, "incidents").filter(
+        (pl.col("incident_id") == symptom.id) & (pl.col("event") == "incident.created"))
+        .select(pl.col("ts_utc").min()).collect().item())
+    pages = (scan(proc, "pages").filter(pl.col("status") == "triggered")
+             .sort("ts_utc", "raw_id").collect().to_dicts())
+    page = opening_page(pages, opened)
+    if page is None:
+        raise ValueError(f"{proc}: no page before incident {symptom.id}")
     key = json.loads(page["fields"] or "{}").get("incident_key")
-    firing = None if key is None else (scan(proc, "alerts").filter(
-        (pl.col("alert_id") == key) & (pl.col("state") == "firing")
-        & pl.col("ts_utc").is_not_null()).select(pl.col("ts_utc").min()).collect().item())
-    alert_at = firing or page["ts_utc"]
-    return Cutoff(as_of=alert_at + AS_OF_AFTER_ALERT, incident_id=live["incident_id"],
-                  alert_id=key if firing else None, alert_at=alert_at)
+    alert_at = firing.get(key) or page["ts_utc"]
+    return Cutoff(as_of=alert_at + AS_OF_AFTER_ALERT, symptom=symptom,
+                  alert_id=key if key in firing else None, alert_at=alert_at)
 
 
-__all__ = ["AS_OF_AFTER_ALERT", "Cutoff", "live_cutoff", "scan"]
+__all__ = ["AS_OF_AFTER_ALERT", "Cutoff", "Symptom", "live_cutoff", "live_symptom",
+           "opening_page", "scan"]

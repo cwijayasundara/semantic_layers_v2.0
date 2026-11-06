@@ -24,7 +24,8 @@ from e2ekg.graph.enricher import EnrichmentResult, HarvestContext
 from e2ekg.graph.enrichers import ENRICHERS
 from e2ekg.graph.shacl import load_ontology, validate
 from e2ekg.graph.store import Store
-from e2ekg.graph.uris import BASE, NS12, ONTOLOGY_GRAPH
+from e2ekg.graph.uris import BASE, NS12, ONTOLOGY_GRAPH, scoped_uri
+from e2ekg.preprocess.asof import Symptom, live_symptom
 from e2ekg.preprocess.identity import Resolver, catalog_from_table
 from e2ekg.preprocess.ledger import DIRECT_TABLES, SELECTED
 from e2ekg.preprocess.selector import selected_raw_ids
@@ -41,12 +42,23 @@ class HarvestReport:
     shacl_text: str = ""
 
 
+def symptom_uri(scenario: str, symptom: Symptom | None) -> str | None:
+    if symptom is None:
+        return None
+    ns, kind = {"incident": ("inc", "incident"), "alert": ("alrt", "alert")}[symptom.kind]
+    return str(scoped_uri(ns, kind, scenario, symptom.id))
+
+
 def make_context(scenario: str, proc_root: Path, out: Path, llm=None,
                  as_of: datetime | None = None) -> HarvestContext:
+    """The context of one harvest. Its symptom is the scenario's live symptom
+    (`asof.live_symptom`), whatever the cutoff: the full and as-of stores explain
+    the same thing."""
     proc_root = Path(proc_root)
     catalog = catalog_from_table(pl.read_parquet(proc_root / "catalog.parquet"))
     return HarvestContext(scenario=scenario, proc_root=proc_root, store=Store(Path(out) / "store"),
-                          resolver=Resolver(catalog, llm), llm=llm, as_of=as_of)
+                          resolver=Resolver(catalog, llm), llm=llm, as_of=as_of,
+                          symptom=symptom_uri(scenario, live_symptom(proc_root)))
 
 
 def harvest(ctx: HarvestContext, out: Path | None = None, shacl: bool = True) -> HarvestReport:

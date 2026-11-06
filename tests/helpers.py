@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from pathlib import Path
+
 from e2ekg.scenario.model import (
     AnswerKey, Application, DependencyEdge, Fault, Scenario, Window,
 )
@@ -212,3 +215,22 @@ def slack_stats(raw_root: Path, channel: str) -> tuple[int, int, int]:
     msgs = slack_messages(raw_root, channel)
     return (len(msgs), len({m["user"] for m in msgs}),
             len(service_mentions(raw_root, [m["text"] for m in msgs])))
+
+
+@dataclass(frozen=True)
+class Preprocessed:
+    raw: Path        # <tmp>/raw/hero
+    proc: Path       # <tmp>/processed/hero
+    answers: Path    # <tmp>/raw/_answers
+    report: object   # PreprocessReport
+
+
+@dataclass(frozen=True)
+class Harvested:
+    store: object    # e2ekg.graph.store.Store
+    report: object   # HarvestReport
+    proc: Path
+    answers: Path
+    out: Path        # the harvest output directory (store/ and harvest.ttl)
+    as_of: object = None   # the cutoff of an as-of store (datetime), None for the full store
+    symptom: str | None = None   # the live symptom's URI (HarvestContext.symptom)

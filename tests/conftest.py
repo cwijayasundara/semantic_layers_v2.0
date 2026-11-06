@@ -2,33 +2,15 @@
 
 Session fixtures: a scale-0.05 hero raw tree preprocessed once with the
 scripted LLM (so the chat tables exist), and that tree harvested once into an
-on-disk Oxigraph store, plus an as-of store of the same tree (R34). The
+on-disk Oxigraph store, plus an as-of store of the same tree (R34); and the
+no-fault control preprocessed the same way. The
 generator builds the fixture (tests may use it); the pipeline under test never imports `e2ekg.generate` (R6). Tests may read
 `_answers/` (the oracle), the pipeline may not (R5)."""
-from dataclasses import dataclass
-from pathlib import Path
-
 import pytest
 
+from helpers import Harvested, Preprocessed
+
 FIXTURE_SCALE = 0.05
-
-
-@dataclass(frozen=True)
-class Preprocessed:
-    raw: Path        # <tmp>/raw/hero
-    proc: Path       # <tmp>/processed/hero
-    answers: Path    # <tmp>/raw/_answers
-    report: object   # PreprocessReport
-
-
-@dataclass(frozen=True)
-class Harvested:
-    store: object    # e2ekg.graph.store.Store
-    report: object   # HarvestReport
-    proc: Path
-    answers: Path
-    out: Path        # the harvest output directory (store/ and harvest.ttl)
-    as_of: object = None   # the cutoff of an as-of store (datetime), None for the full store
 
 
 @pytest.fixture(scope="session")
@@ -57,7 +39,7 @@ def harvested_hero(tmp_path_factory, preprocessed_hero, scripted_llm) -> Harvest
     ctx = make_context("hero", preprocessed_hero.proc, out, llm=scripted_llm)
     report = harvest(ctx, out=out)
     return Harvested(store=ctx.store, report=report, proc=preprocessed_hero.proc,
-                     answers=preprocessed_hero.answers, out=out)
+                     answers=preprocessed_hero.answers, out=out, symptom=ctx.symptom)
 
 
 @pytest.fixture(scope="session")
@@ -70,7 +52,21 @@ def harvested_hero_as_of(tmp_path_factory, preprocessed_hero, scripted_llm) -> H
     ctx = make_context("hero", preprocessed_hero.proc, out, llm=scripted_llm, as_of=as_of)
     report = harvest(ctx, out=out)
     return Harvested(store=ctx.store, report=report, proc=preprocessed_hero.proc,
-                     answers=preprocessed_hero.answers, out=out, as_of=as_of)
+                     answers=preprocessed_hero.answers, out=out, as_of=as_of, symptom=ctx.symptom)
+
+
+@pytest.fixture(scope="session")
+def preprocessed_control(tmp_path_factory, scripted_llm) -> Preprocessed:
+    """The no-fault control variant at fixture scale: no incident opens in its window."""
+    from e2ekg.generate.run import generate_scenario
+    from e2ekg.preprocess.run import preprocess_scenario
+    from e2ekg.scenario.variants import variant_scenarios
+    base = tmp_path_factory.mktemp("control")
+    raw, proc = base / "raw" / "v-control", base / "processed" / "v-control"
+    generate_scenario(next(s for s in variant_scenarios() if s.name == "v-control"), raw,
+                      scale=FIXTURE_SCALE)
+    report = preprocess_scenario(raw, proc, llm=scripted_llm)
+    return Preprocessed(raw=raw, proc=proc, answers=base / "raw" / "_answers", report=report)
 
 
 @pytest.fixture(scope="session")

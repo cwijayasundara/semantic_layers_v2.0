@@ -60,6 +60,7 @@ class HarvestContext:
     resolver: Any            # e2ekg.preprocess.identity.Resolver
     llm: Any                 # e2ekg.llm.LLMClient or None
     as_of: datetime | None = None    # the cutoff of an as-of store (R34); None: the whole window
+    symptom: str | None = None       # URI of what the live RCA investigates (R39, R44)
 
 
 class Enricher(ABC):

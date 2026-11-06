@@ -70,6 +70,22 @@ def test_control_variant_yields_no_chain_to_a_change(harvested_control_signals):
     assert all(c.links[0].type not in CHANGE_TYPES for c in correlate(*harvested_control_signals))
 
 
+def test_the_control_investigates_an_alert_of_its_own_window(harvested_control_as_of,
+                                                             harvested_control_signals):
+    r = harvested_control_as_of.report
+    assert all(v.success for v in r.results.values()), r.results
+    signals, _, symptom = harvested_control_signals
+    assert "/alrt/alert/v-control/" in symptom
+    assert symptom in {s.uri for s in signals if s.type == "alert"}
+    assert not [s for s in signals if s.type == "incident"]       # history incidents are not live
+
+
+def test_the_only_incident_signal_is_the_live_symptom(harvested_hero_signals):
+    signals, _, symptom = harvested_hero_signals
+    assert symptom.endswith("/inc/incident/hero/INC-5377")
+    assert [s.uri for s in signals if s.type == "incident"] == [symptom]
+
+
 # --- signals drawn from the store -----------------------------------------------------
 
 def test_one_signal_per_type_app_and_onset_minute(harvested_hero_as_of):

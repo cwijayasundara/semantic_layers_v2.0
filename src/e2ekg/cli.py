@@ -210,8 +210,8 @@ def _as_of(value: str | None, proc: Path) -> datetime | None:
         return None
     if value == AS_OF_LIVE:
         c = live_cutoff(proc)
-        print(f"{proc.name}: as of {c.as_of.isoformat()} ({c.incident_id}: alert "
-              f"{c.alert_id or '(page)'} at {c.alert_at.isoformat()} + 30 min)", flush=True)
+        print(f"{proc.name}: as of {c.as_of.isoformat()} ({c.symptom.kind} {c.symptom.id}: "
+              f"alert {c.alert_id or '(page)'} at {c.alert_at.isoformat()} + 30 min)", flush=True)
         return c.as_of
     t = datetime.fromisoformat(value)
     if t.tzinfo is None:

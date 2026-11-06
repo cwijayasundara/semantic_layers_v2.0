@@ -1,12 +1,12 @@
 """The as-of store (R34): only what was observable at the live incident's cutoff."""
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import polars as pl
 import pytest
 
 from e2ekg.graph.harvest import raw_selectors
-from e2ekg.preprocess.asof import live_cutoff, scan
+from e2ekg.preprocess.asof import AS_OF_AFTER_ALERT, Symptom, live_cutoff, scan
 from e2ekg.preprocess.ledger import DIRECT_TABLES
 
 PFX = """PREFIX ops: <https://kg.local/ops#>
@@ -29,8 +29,35 @@ def _t(s: str) -> datetime:
 def test_the_cutoff_is_the_live_alert_plus_30_minutes(preprocessed_hero):
     answers = json.loads((preprocessed_hero.answers / "hero.json").read_text())
     c = live_cutoff(preprocessed_hero.proc)
-    assert (c.incident_id, c.alert_id) == ("INC-5377", "radar-09000")
+    assert (c.symptom, c.alert_id) == (Symptom("incident", "INC-5377"), "radar-09000")
     assert c.as_of == _t(answers["as_of_utc"])
+
+
+def _raw_firings(raw) -> list[dict]:
+    rows = []
+    for line in (raw / "alerts" / "radar.jsonl").read_text().splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("state") == "firing":
+            rows.append({**r, "at": _t(r["ts"])})
+    return rows
+
+
+def test_with_no_incident_in_the_window_the_symptom_is_its_first_most_severe_alert(
+        preprocessed_control):
+    from e2ekg.scenario.variants import variant_scenarios
+    window = next(s for s in variant_scenarios() if s.name == "v-control").window
+    firings = [r for r in _raw_firings(preprocessed_control.raw)
+               if window.start_utc <= r["at"] < window.end_utc]
+    assert {r["severity"] for r in firings} == {"warning"}      # no live fault, no critical alert
+    first = min(firings, key=lambda r: r["at"])
+    c = live_cutoff(preprocessed_control.proc)
+    assert c.symptom == Symptom("alert", first["alert_id"])
+    assert (c.alert_at, c.as_of) == (first["at"], first["at"] + AS_OF_AFTER_ALERT)
+    incidents = pl.read_parquet(preprocessed_control.proc / "incidents.parquet")
+    assert incidents.height and (incidents["ts_utc"] < window.start_utc.astimezone(UTC)).all()
 
 
 def test_every_enricher_succeeds_and_the_as_of_store_is_shacl_clean(harvested_hero_as_of):

@@ -31,8 +31,9 @@ Severity squashes a fingerprint's magnitude by the magnitude its detector fires 
 m / (m + m_fire), so a signal at its threshold is 0.5 and a far larger one nears 1.
 Changes, alerts and incidents are declared events, not estimates: severity 1.
 
-The symptom is the live incident: the one created last (the rule of
-`asof.live_cutoff`). Each chain is an ops:CausalChain that ops:explains it, with
+The symptom is the harvest's (HarvestContext.symptom: the live incident, or in a
+window with none, its most severe alert; `asof.live_symptom`). It is the only incident
+drawn as a signal. Each chain is an ops:CausalChain that ops:explains it, with
 ops:confidence, prov:wasDerivedFrom each linked signal, and one ops:CausalLink per
 position (ops:linkOrder from 0 at the root, ops:signalType, ops:onApplication,
 ops:atTime, ops:cites every detection behind the signal)."""
@@ -65,9 +66,9 @@ _EVENTS = _PFX + """SELECT ?s ?type ?app ?t WHERE {
     OPTIONAL { ?s ops:changedApp ?app } }
   UNION { ?s a ops:Alert ; ops:atTime ?t . BIND("alert" AS ?type)
           OPTIONAL { ?s ops:onApplication ?app } }
-  UNION { ?s a ops:Incident ; ops:atTime ?t . BIND("incident" AS ?type)
-          OPTIONAL { SELECT ?s (MIN(STR(?a)) AS ?app) WHERE { ?s ops:affects ?a } GROUP BY ?s } }
 }"""
+_INCIDENT = _PFX + """SELECT ?t (MIN(STR(?a)) AS ?app) WHERE {
+  <%s> a ops:Incident ; ops:atTime ?t . OPTIONAL { <%s> ops:affects ?a } } GROUP BY ?t"""
 _FINGERPRINTS = _PFX + """SELECT ?s ?type ?family ?app ?caller ?t ?end ?m WHERE {
   { ?s a ops:Anomaly ; ops:onSeries/met:metricName ?family . BIND("metric_anomaly" AS ?type) }
   UNION { ?s a ops:LogSpike ; ops:ofPattern ?family . ?family ops:errorCategory ?c .
@@ -112,8 +113,15 @@ def onsets(rows: list[dict]) -> list[Signal]:
     return out
 
 
-def signals_from_store(store) -> list[Signal]:
+def signals_from_store(store, symptom: str | None = None) -> list[Signal]:
+    """Every change, alert and telemetry onset in the store, and the symptom if it is an
+    incident. No other incident is a signal: history incidents explain nothing live."""
     out = []
+    rows = store.query(_INCIDENT % (symptom, symptom)) if symptom else []
+    for r in rows:
+        out.append(Signal(uri=symptom, type="incident", app=_app(r["app"]),
+                          at_utc=datetime.fromisoformat(r["t"]), severity=1.0,
+                          evidence=(symptom,)))
     for r in store.query(_EVENTS):
         kind = CHANGE_SIGNAL.get(r["type"], r["type"])
         out.append(Signal(uri=r["s"], type=kind, app=_app(r["app"]),
@@ -132,15 +140,10 @@ def dependency_edges(store) -> list[tuple[str, str]]:
     return sorted({(_app(r["a"]), _app(r["b"])) for r in rows if _app(r["a"]) and _app(r["b"])})
 
 
-def live_incident(store) -> str | None:
-    rows = store.query(_PFX + """SELECT ?i WHERE { ?i a ops:Incident ; ops:atTime ?t }
-                                 ORDER BY DESC(?t) ?i LIMIT 1""")
-    return rows[0]["i"] if rows else None
-
-
-def chain_inputs(store) -> tuple[list[Signal], list[tuple[str, str]], str | None]:
+def chain_inputs(store, symptom: str | None) -> tuple[list[Signal], list[tuple[str, str]],
+                                                     str | None]:
     """(signals, edges, symptom uri): the arguments of `correlate` over a store."""
-    return signals_from_store(store), dependency_edges(store), live_incident(store)
+    return signals_from_store(store, symptom), dependency_edges(store), symptom
 
 
 def priors_with_history(store) -> dict[tuple[str, str], float]:
@@ -166,7 +169,7 @@ class CorrelationEnricher(Enricher):
              "graph:alerts_incidents")
 
     def fetch(self, ctx):
-        return chain_inputs(ctx.store)
+        return chain_inputs(ctx.store, ctx.symptom)
 
     def analyze(self, raw):
         signals, edges, symptom = raw
