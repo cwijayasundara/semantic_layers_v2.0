@@ -889,9 +889,9 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         against, plus the changes you name. Each must pass: closure (the alert app depends on its app),
         timing (it landed before the onset, skew-corrected time), clients (every client of
         the alert app depends on its app), already_degrading (neither its app nor anything
-        it depends on was degrading before it landed), origin (not autoscaling, not a commit
-        a later deployment shipped), propagation (slow or failed calls, from it on, lead
-        from its app up to the alert app). Returns
+        it depends on was degrading before it landed), origin (not autoscaling, not a commit:
+        its deployment is the change), propagation (slow or failed calls, from it on, lead
+        from its app, or a datastore's or cache's callers, up to the alert app). Returns
         {symptom{alert,app,alert_at,onset,onset_uri,clients,filed_against,filed_in_closure},
         candidates[{uri,kind,app,at,survives,refuted_by,supported_by,chain_conf}]},
         survivors first.

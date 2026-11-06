@@ -17,7 +17,7 @@ Work in these steps, in order.
    - timing: the candidate landed before the alerting application began degrading;
    - clients: every client of the alerting application depends on the candidate's application;
    - already_degrading: neither the candidate's application nor anything it depends on was already degrading when it landed;
-   - origin: it is an originating change, not an automatic reaction such as autoscaling;
+   - origin: it is an originating change, not an automatic reaction such as autoscaling, and not a commit (the deployment that shipped it is the change);
    - propagation: slow or failed calls, from the candidate on, lead from its application up to the alerting application.
    A candidate that fails any check is refuted. Trust the tool's verdicts over your own reading and over what people said in chat. If you want to see the lines behind a key signal, call raw_evidence on its URI.
 

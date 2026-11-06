@@ -16,6 +16,7 @@ from e2ekg.correlate.engine import CHANGE_TYPES, TELEMETRY, WINDOW_S, Chain, Sig
 
 LOOKBACK = timedelta(hours=1)          # candidates: changes this long before the onset
 EPISODE_GAP = timedelta(seconds=WINDOW_S)
+UNTRACED = frozenset({"datastore", "cache"})   # seen only through their callers' spans
 
 
 def _minute(t: datetime) -> datetime:
@@ -56,9 +57,14 @@ class Investigation:
     def __init__(self, signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
                  calls: Iterable[Call], app_kinds: dict[str, str], alert_uri: str,
                  filed_against: Sequence[str], chains: Sequence[Chain]):
+        edges = list(edges)
         self.signals = sorted(signals, key=lambda s: (s.at_utc, s.uri))
         self.topo = Topology(edges)
         self.calls = sorted(calls, key=lambda c: (c.at, c.caller, c.callee))
+        self.kinds = app_kinds
+        self.callers: dict[str, set[str]] = {}
+        for caller, callee in edges:
+            self.callers.setdefault(callee, set()).add(caller)
         self.chains = chains
         self.filed_against = tuple(sorted(filed_against))
         alert = next((s for s in self.signals if s.uri == alert_uri), None)
@@ -154,19 +160,19 @@ def origin(inv: Investigation, c: Signal) -> Check:
     if c.type == "autoscaling":
         return Check("origin", False, "autoscaling reacts to load or configuration")
     if c.type == "commit":
-        shipped = [s for s in inv.signals if s.type == "deployment" and s.app == c.app
-                   and c.at_utc < s.at_utc <= inv.onset.at_utc]
-        if shipped:
-            return Check("origin", False, f"a commit takes effect when deployed; "
-                                          f"{shipped[0].uri} shipped it")
+        return Check("origin", False, "a commit changes running code only through a "
+                                      "deployment; judge the deployment that shipped it")
     return Check("origin", True, "an originating change")
 
 
 def propagation(inv: Investigation, c: Signal) -> Check:
-    """Slow or failed calls, from the change on, lead from its app up to the alert app."""
+    """Slow or failed calls, from the change on, lead from its app up to the alert app. An
+    untraced app (a datastore or cache) starts the path at its direct callers."""
     lo, hi, goal = _minute(c.at_utc), inv.alert.at_utc, inv.alert.app
     via: dict[str, str | None] = {c.app: None}
-    frontier = [c.app]
+    if inv.kinds.get(c.app) in UNTRACED:
+        via |= {k: c.app for k in inv.callers.get(c.app, ()) if k not in via}
+    frontier = list(via)
     while frontier and goal not in via:
         reached = set(frontier)
         frontier = []
