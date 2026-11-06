@@ -150,7 +150,7 @@ def live_cutoff(proc: Path) -> Cutoff:
         raise ValueError(f"{proc}: no page before incident {live['incident_id']}")
     page = pages.row(-1, named=True)
     key = json.loads(page["fields"] or "{}").get("incident_key")
-    firing = (scan(proc, "alerts").filter(
+    firing = None if key is None else (scan(proc, "alerts").filter(
         (pl.col("alert_id") == key) & (pl.col("state") == "firing")
         & pl.col("ts_utc").is_not_null()).select(pl.col("ts_utc").min()).collect().item())
     alert_at = firing or page["ts_utc"]
