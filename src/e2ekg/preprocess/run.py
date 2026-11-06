@@ -22,6 +22,7 @@ from typing import Any
 
 import polars as pl
 
+from e2ekg.preprocess.identity import Resolver, catalog_from_table, resolve_tables
 from e2ekg.preprocess.ledger import check_coverage
 from e2ekg.preprocess.parsers import PARSERS, UNKNOWN, Truncated, detect_format
 from e2ekg.preprocess.tables import (
@@ -67,6 +68,7 @@ class PreprocessReport:
     ts_unparsed: int = 0
     skew: dict[str, dict[str, int]] = field(default_factory=dict)
     coverage: dict[str, Any] = field(default_factory=dict)
+    identity: dict[str, dict[str, int]] = field(default_factory=dict)  # table -> method -> rows
     seconds: float = 0.0
 
 
@@ -213,7 +215,7 @@ def _skew_inputs(out: Path) -> tuple[pl.DataFrame, pl.DataFrame]:
 
 
 def preprocess_scenario(raw_root: Path, processed_root: Path, llm: Any = None) -> PreprocessReport:
-    """`llm` is unused at layer 1; Tasks 7-9 extend this entry point."""
+    """`llm` (optional) only ever picks from the resolver's closed candidate list."""
     t0 = time.perf_counter()
     raw_root, out = Path(raw_root), Path(processed_root)
     out.mkdir(parents=True, exist_ok=True)
@@ -240,6 +242,9 @@ def preprocess_scenario(raw_root: Path, processed_root: Path, llm: Any = None) -
     for t in SKEWED_TABLES:
         report.tables[t] = _apply_skew(out, t, report.skew[t])
     (out / "clock_skew.json").write_text(json.dumps(report.skew, indent=1, sort_keys=True))
+
+    resolver = Resolver(catalog_from_table(pl.read_parquet(out / "catalog.parquet")), llm)
+    report.identity = resolve_tables(out, resolver)
 
     cov = check_coverage(raw_root, out)
     report.coverage = {"files": cov.files, "bytes_total": cov.bytes_total,
