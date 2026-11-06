@@ -24,11 +24,14 @@ from e2ekg.preprocess import asof
 TABLES = ("alerts", "events", "incidents", "logs", "metrics_atlas", "metrics_prom", "pages",
           "slack", "spans")
 CHUNK = 1 << 26
+SEPARATOR = 2          # a raw id spans a record without its line break; <= 2 bytes (\r\n) apart
 WHOLE_DIRS = ("catalog",)
 
 
 def visible_ranges(proc: Path, as_of: datetime) -> dict[str, list[tuple[int, int]]]:
-    """rel_path -> merged [start, end) byte ranges of the raw records observable at `as_of`."""
+    """rel_path -> merged [start, end) byte ranges of the raw records observable at `as_of`.
+    A raw id spans a record without the line break after it, so records at most SEPARATOR
+    bytes apart share a range (the break between them is inside it)."""
     parts = []
     for t in TABLES:
         ids = asof.scan(proc, t, as_of).select("raw_id").unique().collect()["raw_id"]
@@ -39,13 +42,22 @@ def visible_ranges(proc: Path, as_of: datetime) -> dict[str, list[tuple[int, int
         "path", "start")
     recs = recs.with_columns(
         prev=pl.col("end").cum_max().shift(1).over("path")).with_columns(
-        block=(pl.col("prev").is_null() | (pl.col("start") > pl.col("prev"))).cum_sum().over("path"))
+        block=(pl.col("prev").is_null() | (pl.col("start") > pl.col("prev") + SEPARATOR)).cum_sum().over("path"))
     merged = recs.group_by("path", "block").agg(
         pl.col("start").min(), pl.col("end").max()).sort("path", "start")
     out: dict[str, list[tuple[int, int]]] = {}
     for path, start, end in merged.select("path", "start", "end").iter_rows():
         out.setdefault(path, []).append((start, end))
     return out
+
+
+def _line_break(f, at: int) -> int:
+    """Bytes of the line break (\\n or \\r\\n) that follows a record ending at `at`."""
+    f.seek(at)
+    tail = f.read(SEPARATOR)
+    if tail[:2] == b"\r\n":
+        return 2
+    return 1 if tail[:1] == b"\n" else 0
 
 
 def build_raw_view(raw: Path, proc: Path, as_of: datetime, dest: Path) -> dict:
@@ -65,6 +77,7 @@ def build_raw_view(raw: Path, proc: Path, as_of: datetime, dest: Path) -> dict:
         pos, segments = 0, []
         with src.open("rb") as f, (tmp / path).open("wb") as out:
             for start, end in spans:
+                end += _line_break(f, end)
                 f.seek(start)
                 for left in range(end - start, 0, -CHUNK):
                     out.write(f.read(min(CHUNK, left)))

@@ -64,3 +64,17 @@ def test_a_view_cut_at_the_same_instant_is_reused_and_another_is_rebuilt(
     assert ensure_raw_view(preprocessed_hero.raw, preprocessed_hero.proc,
                            cut.replace(hour=cut.hour - 1), dest) == "rebuilt"
     json.loads(dest.with_name("hero.view.json").read_text())
+
+
+def test_records_keep_their_line_breaks_so_a_view_line_is_still_one_record(view, preprocessed_hero):
+    dest, cut, _ = view
+    for table, path in (("alerts", "alerts/radar.jsonl"), ("incidents", "incidents/incident_io.jsonl"),
+                        ("slack", None)):
+        rows = asof.scan(preprocessed_hero.proc, table, cut).select("raw_id").unique().collect()
+        files = {r.split("|")[1] for r in rows["raw_id"]}
+        for f in files:
+            lines = (dest / f).read_bytes().splitlines()
+            n = sum(r.split("|")[1] == f for r in rows["raw_id"])
+            assert len(lines) == n, f
+            if f.endswith(".jsonl"):
+                assert all(json.loads(line) for line in lines), f
