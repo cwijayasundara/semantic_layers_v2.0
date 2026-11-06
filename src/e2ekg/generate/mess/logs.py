@@ -139,24 +139,46 @@ def pii(self, recs, rng, scenario):
     return out, inj
 
 
-def _latin1able(pl: bytes) -> bool:
+def latin1_undecodable(pl: bytes) -> bytes | None:
+    """The latin-1 re-encoding of a UTF-8 line, but only if the result really
+    fails UTF-8 decoding (e.g. "Ã©" re-encodes to C3 A9, which is valid "é")."""
+    if pl.isascii():
+        return None
     try:
-        pl.decode("utf-8").encode("latin-1")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return False
-    return not pl.isascii()
+        out = pl.decode("utf-8").encode("latin-1")
+        out.decode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    except UnicodeDecodeError:
+        return out
+    return None
 
 
 @injector("log.encoding", ("logs",), phase="bytes")
 def encoding(self, recs, rng, scenario):
     """One line per non-ASCII log file is written latin-1 instead of UTF-8.
-    Truncated JSON lines are skipped so each corruption stays separable."""
-    files = by_path(recs, lambda r: _is_log(self, r) and _latin1able(r.payload)
-                    and (r.fmt != "json" or r.payload.endswith(b"}")))
+    Only lines whose latin-1 bytes are undecodable as UTF-8 qualify (the
+    others are passed over for another line of the file), and truncated JSON
+    lines are skipped so each corruption stays separable."""
+    enc: dict[int, bytes] = {}
+    for i, r in enumerate(recs):
+        if _is_log(self, r) and (r.fmt != "json" or r.payload.endswith(b"}")):
+            b = latin1_undecodable(r.payload)
+            if b is not None:
+                enc[i] = b
+    files: dict[str, list[int]] = {}
+    for i in enc:
+        files.setdefault(recs[i].rel_path, []).append(i)
     out, inj, loc = list(recs), [], local_index(recs)
     for p, idxs in files.items():
         i = idxs[int(rng.integers(len(idxs)))]
-        out[i] = replace(recs[i], payload=recs[i].payload.decode("utf-8").encode("latin-1"))
+        try:
+            enc[i].decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:  # pragma: no cover - guarded by latin1_undecodable
+            raise AssertionError(f"log.encoding produced decodable bytes in {p}")
+        out[i] = replace(recs[i], payload=enc[i])
         inj.append(self.record(p, idx=loc[i], at_utc=recs[i].at_utc, from_enc="utf-8",
                                to_enc="latin-1"))
     return out, inj

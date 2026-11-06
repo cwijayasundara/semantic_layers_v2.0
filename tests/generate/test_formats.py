@@ -3,7 +3,13 @@ import json
 import pytest
 import yaml
 
-from e2ekg.generate.formats import FORMATTERS, JSON_FMTS, MULTILINE_FMTS, Stamp, render_ts
+from e2ekg.generate.formats import (
+    FORMATTERS,
+    JSON_FMTS,
+    MULTILINE_FMTS,
+    Stamp,
+    render_ts,
+)
 from e2ekg.timeutil import pt
 
 ALL_FMTS = {"json", "logfmt", "log4j", "nginx", "atlas_jsonl", "prom", "otlp_jsonl",
@@ -106,6 +112,16 @@ def test_otlp_resource_spans_shape():
     assert span["status"] == {"code": 2}
 
 
+def test_otlp_events_rendered_as_otlp_events():
+    out = json.loads(FORMATTERS["otlp_jsonl"]({
+        "resource": {"service.name": "a"}, "scope": "s",
+        "spans": [{"traceId": "t", "spanId": "s1", "name": "op", "kind": 2, "start": T, "end": T,
+                   "events": [{"time": T, "name": "retry", "attributes": {"n": 2}}]}]}))
+    assert out["scopeSpans"][0]["spans"][0]["events"] == [
+        {"timeUnixNano": "1792014723000000000", "name": "retry",
+         "attributes": [{"key": "n", "value": {"intValue": "2"}}]}]
+
+
 def test_zipkin_timestamp_micros():
     out = json.loads(FORMATTERS["zipkin_jsonl"]({"traceId": "t", "id": "i", "timestamp": T,
                                                  "duration": 5}))
@@ -124,7 +140,17 @@ def test_gitlog_block():
                                 "message": "Subject\n\nBody"})
     assert out.decode().split("\n") == [
         "commit " + "a" * 40, "Author: D <d@x>", "Date:   Wed Oct 14 21:52:03 2026 +0000", "",
-        "    Subject", "", "    Body"]
+        "    Subject", "    ", "    Body"]
+
+
+def test_gitlog_message_bytes_stay_faithful():
+    """No splitlines(): \r\n, \x0b, \x1c and a trailing newline survive."""
+    msg = "a\r\nb\x0bc\x1cd\n"
+    out = FORMATTERS["gitlog"]({"sha": "b" * 40, "author": "D <d@x>", "date": T, "message": msg})
+    assert not out.endswith(b"\n") and b"\r" not in out
+    body = out.decode().split("\n")[4:]
+    assert body == ["    a\\r", "    b\x0bc\x1cd", "    "]
+    assert "\n".join(ln[4:] for ln in body).replace("\\r", "\r") == msg
 
 
 def test_catalog_yaml_document():

@@ -48,12 +48,12 @@ def test_write_source_offsets_per_path_and_tags(tmp_path):
     assert [t for _, t in out] == [frozenset({"t1"}), frozenset(), frozenset({"t2"})]
 
 
-def test_write_source_appends_to_existing_file(tmp_path):
+def test_write_source_refuses_existing_file(tmp_path):
     write_source([rec("logs", "a.log", b"first")], tmp_path)
-    out = write_source([rec("logs", "a.log", b"second")], tmp_path)
-    span = RawSpan.parse(out[0][0])
-    assert span.offset == 6
-    assert (tmp_path / "a.log").read_bytes() == b"first\nsecond\n"
+    with pytest.raises(FileExistsError):
+        write_source([rec("logs", "b.log", b"x"), rec("logs", "a.log", b"second")], tmp_path)
+    assert (tmp_path / "a.log").read_bytes() == b"first\n"
+    assert not (tmp_path / "b.log").exists()
 
 
 def test_write_source_serializes_records_without_payload(tmp_path):

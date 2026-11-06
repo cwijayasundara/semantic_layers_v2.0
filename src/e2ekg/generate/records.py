@@ -34,9 +34,10 @@ def serialize(rec: RawRecord) -> RawRecord:
 
 
 def write_source(records: Sequence[RawRecord], root: Path) -> list[tuple[str, frozenset[str]]]:
-    """Append each payload + b"\\n" to root/rel_path in the given order and
-    return (raw_id, tags) per record. Each file is opened once per call and
-    offsets continue from its current size, so repeated calls append."""
+    """Write each payload + b"\\n" to root/rel_path in the given order and
+    return (raw_id, tags) per record. Each file is created once per call; an
+    already-existing target raises FileExistsError (nothing is written), so
+    stale output can never leak into a deterministic raw tree."""
     root = Path(root)
     chunks: dict[str, list[bytes]] = {}
     sizes: dict[str, int] = {}
@@ -45,8 +46,9 @@ def write_source(records: Sequence[RawRecord], root: Path) -> list[tuple[str, fr
         payload = serialize(rec).payload
         assert payload is not None
         if rec.rel_path not in sizes:
-            p = root / rec.rel_path
-            sizes[rec.rel_path] = p.stat().st_size if p.exists() else 0
+            if (root / rec.rel_path).exists():
+                raise FileExistsError(root / rec.rel_path)
+            sizes[rec.rel_path] = 0
             chunks[rec.rel_path] = []
         out.append((raw_id(rec.source, rec.rel_path, sizes[rec.rel_path], payload), rec.tags))
         chunks[rec.rel_path] += (payload, b"\n")
@@ -54,6 +56,6 @@ def write_source(records: Sequence[RawRecord], root: Path) -> list[tuple[str, fr
     for rel, parts in chunks.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("ab") as fh:
+        with p.open("xb") as fh:
             fh.write(b"".join(parts))
     return out

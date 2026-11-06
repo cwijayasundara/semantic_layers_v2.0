@@ -207,8 +207,11 @@ def _otlp_span(s: dict) -> dict:
            "startTimeUnixNano": _ts(s["start"], "epoch_ns_str"),
            "endTimeUnixNano": _ts(s["end"], "epoch_ns_str"),
            "attributes": _kv(s.get("attributes", {})), "status": s.get("status", {"code": 0})}
+    if "events" in s:
+        out["events"] = [{"timeUnixNano": _ts(e["time"], "epoch_ns_str"), "name": e["name"],
+                          "attributes": _kv(e.get("attributes", {}))} for e in s["events"]]
     known = {"traceId", "spanId", "parentSpanId", "name", "kind", "start", "end", "attributes",
-             "status"}
+             "status", "events"}
     out |= {k: _walk(v, "epoch_ns_str") for k, v in s.items() if k not in known}
     return out
 
@@ -242,7 +245,10 @@ def _gitlog(f: dict) -> bytes:
     _check(f, {"sha", "author", "date", "message"})
     lines = [f"commit {f['sha']}", f"Author: {f['author']}", f"Date:   {_ts(f['date'], 'git_utc')}",
              ""]
-    lines += [f"    {ln}" if ln else "" for ln in str(f["message"]).splitlines()]
+    # split("\n") only: splitlines() would collapse \r\n, drop a trailing
+    # newline and turn \x0b, \x1c, ... into real newlines. Every message line,
+    # blank ones too, is indented, so the payload never ends with "\n".
+    lines += [f"    {ln}" for ln in str(f["message"]).replace("\r", "\\r").split("\n")]
     return "\n".join(lines).encode()
 
 

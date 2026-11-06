@@ -4,9 +4,20 @@ from datetime import timedelta
 
 from helpers import rng
 
+from e2ekg.generate.formats import FORMATTERS
 from e2ekg.generate.mess import INJECTORS, MessInjection, apply_mess
+from e2ekg.generate.mess.logs import encoding, latin1_undecodable
+from e2ekg.generate.mess.traces import (
+    SAMPLING_IGNORANT_APPS,
+    head_sampled,
+    sampling,
+    zipkin_legacy,
+)
 from e2ekg.generate.records import RawRecord, write_source
 from e2ekg.scenario.hero import hero_scenario
+from e2ekg.timeutil import pt
+
+T = pt(2026, 10, 14, 14, 52, 3)
 
 IDS = (
     "id.alias_surface", "id.casing", "id.suffix", "id.kind_confusion", "id.stale_catalog_alias",
@@ -188,18 +199,100 @@ def test_truncate_cuts_json_mid_object(hero_fixture_records):
         assert bytes.fromhex(d["removed_hex"])[-1:] == b"}"
 
 
-def test_sampling_records_decision_counts(hero_fixture_records):
+def test_head_sampled_is_error_aware_and_about_one_percent():
+    assert head_sampled("anything", has_error=True)
+    ids = [f"{n:032x}" for n in range(20_000)]
+    rate = sum(head_sampled(t) for t in ids) / len(ids)
+    assert 0.007 < rate < 0.013
+    assert [head_sampled(t) for t in ids[:500]] == [head_sampled(t) for t in ids[:500]]
+
+
+def test_sampling_drops_only_ignorant_apps_per_trace(hero_fixture_records):
+    before = hero_fixture_records()
     recs, inj = messed(hero_fixture_records)
-    s = [json.loads(i.detail) for i in by_id(inj)["trc.sampling"]]
-    assert s and all({"traces_seen", "kept_head", "kept_error", "dropped_traces",
-                      "dropped_spans"} <= d.keys() for d in s)
-    # The two error traces (ids 1 and 2) are always kept.
-    kept = set()
-    for r in recs:
-        if r.fmt == "otlp_jsonl":
-            d = json.loads(r.payload)
-            kept |= {sp["traceId"] for ss in d["scopeSpans"] for sp in ss["spans"]}
-    assert {f"{1:032x}", f"{2:032x}"} <= kept
+    drops = [json.loads(i.detail) for i in by_id(inj)["trc.sampling"]]
+    assert drops and all(d["trace_id"] and d["dropped_span_ids"] for d in drops)
+    assert all(set(d["apps"]) <= SAMPLING_IGNORANT_APPS for d in drops)
+    # Every non-legacy OTLP span survives.
+    others = {sp["spanId"] for r in before if r.fmt == "otlp_jsonl"
+              and r.fields["resource"]["service.name"] not in SAMPLING_IGNORANT_APPS
+              for sp in r.fields["spans"]}
+    after = {sp["spanId"] for r in recs if r.fmt == "otlp_jsonl"
+             for ss in json.loads(r.payload)["scopeSpans"] for sp in ss["spans"]}
+    assert others <= after
+
+
+def _trace_rec(tid, sid, app, tags=(), rel="traces/zipkin/1500.jsonl"):
+    return RawRecord(source="traces", rel_path=rel, fmt="zipkin_jsonl", tags=frozenset(tags),
+                     fields={"traceId": tid, "id": sid, "name": "op", "timestamp": T,
+                             "duration": 5, "localEndpoint": {"serviceName": app}, "tags": {}},
+                     at_utc=T)
+
+
+def test_sampling_never_drops_evidence_spans():
+    tagged = [_trace_rec(f"{n:032x}", f"{n:016x}", "ratings-svc", ("evidence:slow_trace",))
+              for n in range(40)]
+    plain = [_trace_rec(f"{n:032x}", f"{n + 100:016x}", "ratings-svc") for n in range(40)]
+    out, inj = sampling.apply(tagged + plain, rng(7), hero_scenario())
+    assert all(r in out for r in tagged)
+    dropped = {s for i in inj for s in json.loads(i.detail)["dropped_span_ids"]}
+    assert dropped and dropped <= {r.fields["id"] for r in plain}
+    assert len(out) == 80 - len(dropped)
+
+
+def test_zipkin_conversion_is_lossless_for_a_rich_span():
+    span = {"traceId": "ab" * 16, "spanId": "cd" * 8, "parentSpanId": "ef" * 8,
+            "name": "GetRatings", "kind": 1, "start": T, "end": T + timedelta(milliseconds=7),
+            "attributes": {"rpc.system": "grpc", "retries": 2, "ratio": 0.5, "cached": False,
+                           "ids": [1, 2], "host.name": "span-host"},
+            "status": {"code": 2, "message": "DEADLINE_EXCEEDED"},
+            "events": [{"time": T, "name": "retry", "attributes": {"attempt": 1}}],
+            "traceState": "vendor=1"}
+    rec = RawRecord(source="traces", rel_path="traces/otlp/1500.jsonl", fmt="otlp_jsonl",
+                    fields={"resource": {"service.name": "RatingsSvc", "host.name": "res-host",
+                                         "region": "us-west-2"},
+                            "scope": "netflix.tracer", "spans": [span]},
+                    at_utc=T, tags=frozenset({"evidence:slow_trace"}))
+    out, inj = zipkin_legacy.apply([rec], rng(7), hero_scenario())
+    (z,) = out
+    assert z.tags == rec.tags and z.rel_path == "traces/zipkin/1500.jsonl"
+    d = json.loads(FORMATTERS["zipkin_jsonl"](z.fields))
+    assert d["traceId"] == span["traceId"] and d["id"] == span["spanId"]
+    assert d["parentId"] == span["parentSpanId"]
+    assert d["name"] == "GetRatings"
+    assert d["localEndpoint"] == {"serviceName": "RatingsSvc"}
+    assert d["timestamp"] == 1792014723000000 and d["duration"] == 7000
+    assert "kind" not in d and d["tags"]["otel.span_kind"] == "1"
+    t = d["tags"]
+    assert t["rpc.system"] == "grpc" and t["retries"] == "2" and t["ratio"] == "0.5"
+    assert t["cached"] == "false" and json.loads(t["ids"]) == [1, 2]
+    assert t["host.name"] == "span-host" and t["otel.resource.host.name"] == "res-host"
+    assert t["region"] == "us-west-2"
+    assert t["otel.scope.name"] == "netflix.tracer"
+    assert t["otel.status_code"] == "ERROR" and t["error"] == "DEADLINE_EXCEEDED"
+    assert t["otel.traceState"] == "vendor=1"
+    assert d["annotations"] == [{"timestamp": 1792014723000000, "value": 'retry {"attempt":1}'}]
+    assert json.loads(inj[0].detail)["prefixed_resource_keys"] == ["host.name"]
+
+
+def test_encoding_output_never_decodes_as_utf8():
+    assert latin1_undecodable("Ã©".encode()) is None  # latin-1 bytes C3 A9 are valid UTF-8
+    assert latin1_undecodable("é".encode()) == b"\xe9"
+    assert latin1_undecodable(b"ascii") is None
+    lines = [RawRecord(source="logs", rel_path="logs/a/h.log", fmt="logfmt", fields={},
+                       payload=f"msg={m}".encode(), at_utc=T) for m in ("Ã©", "Ã©", "café")]
+    lone = RawRecord(source="logs", rel_path="logs/b/h.log", fmt="logfmt", fields={},
+                     payload="msg=Ã©".encode(), at_utc=T)
+    for seed in range(10):
+        out, inj = encoding.apply([*lines, lone], rng(seed), hero_scenario())
+        assert [i.rel_path for i in inj] == ["logs/a/h.log"]
+        assert out[2].payload == "msg=café".encode("latin-1")
+        try:
+            out[2].payload.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        else:
+            raise AssertionError("still decodable")
 
 
 def test_zipkin_legacy_moves_legacy_app_spans(hero_fixture_records):
