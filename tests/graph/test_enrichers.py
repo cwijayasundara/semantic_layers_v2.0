@@ -161,6 +161,45 @@ def test_access_status_only_for_access_log_templates():
     assert access_status("Deadline exceeded calling <*> after <*>ms", ["a", "504"]) is None
 
 
+# api-gateway -> entitlement-svc at scale 0.25, 19:02Z to 20:40Z: (minute offset, spans, p50 ms).
+# Off the causal path; its 20:36Z minute (3 spans, p50 64 ms) was a slow_trace.
+_SPARSE_EDGE = (
+    (0, 1, 16), (1, 2, 25.5), (2, 4, 23), (3, 2, 42), (4, 5, 37), (5, 2, 18.5), (8, 3, 21),
+    (9, 1, 23), (10, 1, 22), (11, 1, 36), (12, 2, 44), (13, 1, 15), (14, 2, 27.5), (15, 1, 20),
+    (16, 1, 24), (17, 1, 59), (19, 1, 45), (20, 2, 21.5), (21, 2, 31.5), (22, 2, 32.5),
+    (23, 1, 43), (24, 1, 20), (25, 1, 37), (26, 1, 27), (28, 1, 46), (29, 3, 31), (30, 1, 43),
+    (31, 2, 47), (32, 2, 30), (33, 3, 36), (34, 5, 30), (35, 4, 41), (36, 2, 32), (37, 3, 28),
+    (39, 3, 40), (40, 2, 23), (41, 1, 35), (42, 2, 46), (44, 2, 48), (45, 2, 38.5), (48, 1, 33),
+    (49, 3, 26), (50, 1, 27), (51, 1, 24), (52, 1, 20), (53, 2, 36.5), (54, 3, 27), (55, 3, 33),
+    (56, 1, 24), (57, 3, 22), (58, 1, 50), (59, 1, 23), (61, 2, 44.5), (62, 2, 38.5), (63, 1, 28),
+    (64, 1, 24), (65, 2, 24.5), (67, 2, 28), (68, 1, 20), (69, 3, 39), (70, 2, 37), (71, 2, 36.5),
+    (75, 1, 38), (77, 3, 28), (78, 3, 44), (81, 1, 40), (82, 3, 26), (83, 2, 30.5), (84, 1, 56),
+    (85, 3, 24), (86, 4, 30), (88, 4, 28.5), (90, 1, 23), (92, 2, 21), (93, 6, 22), (94, 3, 64),
+    (95, 4, 29), (96, 1, 30), (97, 1, 15), (98, 2, 42.5))
+
+
+def _series(points):
+    import numpy as np
+    size = max(i for i, _, _ in points) + 1
+    p50, n = np.zeros(size), np.zeros(size)
+    for i, k, v in points:
+        n[i], p50[i] = k, v
+    return p50, n
+
+
+def test_a_sparse_edge_one_slow_minute_is_not_a_slow_trace():
+    from e2ekg.graph.enrichers.traces import slow_windows
+    assert slow_windows(*_series(_SPARSE_EDGE)) == []
+
+
+def test_a_slow_trace_needs_persistence_or_volume():
+    from e2ekg.graph.enrichers.traces import slow_windows
+    base = [(i, 30, 30.0 + i % 3) for i in range(60)]
+    assert slow_windows(*_series(base + [(60, 3, 90.0), (61, 3, 90.0)]))      # two minutes
+    assert slow_windows(*_series(base + [(60, 30, 90.0)]))                      # 30 spans
+    assert not slow_windows(*_series(base + [(60, 5, 90.0)]))                   # neither
+
+
 def test_a_series_with_untimed_rows_is_one_node_with_one_count():
     from e2ekg.graph.enrichers.metrics import MetricAnomalyEnricher
     e = MetricAnomalyEnricher()

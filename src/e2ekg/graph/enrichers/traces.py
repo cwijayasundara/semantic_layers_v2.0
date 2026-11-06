@@ -13,7 +13,8 @@ p50/p99 duration and error rate. Its rows partition the spans table, so:
     (per-minute error rate 6 binomial sigmas over the trailing-hour pooled rate,
     with at least 3 errors). The onset threshold holds for the whole run, which
     ends after more than 2 minutes back under it. Minutes with fewer than 3
-    spans never start or extend a run. ops:magnitude is the peak over the
+    spans never start or extend a run. A slow_trace window also needs a
+    second minute over the threshold or at least 20 spans. ops:magnitude is the peak over the
     baseline; trc:p50Ms / trc:p99Ms are the peak per-minute values; the
     selector covers exactly the window's minutes, so ops:count = its spans.
 e2e_bottleneck (the critical-path edge of one request) needs per-trace
@@ -33,6 +34,12 @@ OPS, TRC = NS["ops"], NS["trc"]
 MINUTE = timedelta(minutes=1)
 BASE_MIN, MIN_BASE_POINTS, MIN_SPANS, MISS_MAX = 60, 10, 3, 2
 SLOW_RATIO, Z, MIN_ERRORS, P_FLOOR = 2.0, 6.0, 3, 0.005
+# A slow window must persist (two minutes over the onset threshold) or carry volume: the
+# median of a handful of spans is noise, and one such minute somewhere among thousands of
+# edge-minutes clears 6 sigma by chance (0.25-scale hero: 3 spans on api-gateway ->
+# entitlement-svc). The failed_trace test needs no such rule: its binomial sigma already
+# shrinks with the minute's span count and it needs 3 errors.
+SLOW_MIN_WINDOW_SPANS = 20
 
 
 def runs(x: np.ndarray, ok: np.ndarray, threshold) -> list[tuple[int, int, float]]:
@@ -68,7 +75,8 @@ def slow_windows(p50: np.ndarray, n: np.ndarray) -> list[tuple[int, int, float]]
         med = float(np.median(b))
         sigma = max(1.4826 * float(np.median(np.abs(b - med))), 0.05 * med, 1e-6)
         return max(SLOW_RATIO * med, med + Z * sigma), med
-    return runs(p50, ok, threshold)
+    return [(i, j, b) for i, j, b in runs(p50, ok, threshold)
+            if j > i or n[i:j + 1].sum() >= SLOW_MIN_WINDOW_SPANS]
 
 
 def failed_windows(rate: np.ndarray, n: np.ndarray) -> list[tuple[int, int, float]]:
