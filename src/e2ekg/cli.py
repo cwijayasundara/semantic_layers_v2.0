@@ -287,6 +287,25 @@ def _add_ontology(sub) -> None:
     c.set_defaults(func=_cmd_ontology_check)
 
 
+def _cmd_rca(args: argparse.Namespace) -> int:
+    from e2ekg.agent.autorca import run_rca
+    report = run_rca(args.alert, args.scenario, root=Path(args.root),
+                     evidence_root=Path(args.evidence) if args.evidence else None)
+    print(report.model_dump_json(indent=2))
+    return 0 if report.verdict == "root_cause_found" else 1
+
+
+def _add_rca(sub) -> None:
+    p = sub.add_parser("rca", help="AutoRCA: investigate an alert over the as-of graph (GLM; "
+                                   "needs FIREWORKS_API_KEY)")
+    p.add_argument("--scenario", default="hero")
+    p.add_argument("--alert", required=True, help="alert id (radar-...) or incident id")
+    p.add_argument("--root", default="data", help="data root (<root>/graph/<scenario>/as_of)")
+    p.add_argument("--evidence", default=None,
+                   help="directory behind the agent's /evidence/ (default <root>/agent/<sc>)")
+    p.set_defaults(func=_cmd_rca)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="e2ekg")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -295,6 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ledger(sub)
     _add_harvest(sub)
     _add_ontology(sub)
+    _add_rca(sub)
     return parser
 
 

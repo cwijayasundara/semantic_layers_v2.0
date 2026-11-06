@@ -1,0 +1,401 @@
+"""The AutoRCA agent: seven specialists with their own tools and prompts, a commander that
+refutes before it concludes, and no way to reach the full store or the answer key.
+
+Unit tests drive the real compiled agent with a scripted tool-calling model: one policy
+plays the commander and every specialist, and the report it returns is transcribed from the
+real tools' outputs, so what is asserted is what the graph and the refutation check say."""
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from agent_helpers import fake_tool_model, subagent_names, tool_names
+from langchain_core.callbacks import UsageMetadataCallbackHandler
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from e2ekg.agent import autorca
+from e2ekg.agent.autorca import build_autorca, run_rca
+from e2ekg.agent.report import RCAReport
+from e2ekg.agent.specialists import PROMPTS, SPECIALISTS, build_specialists
+from e2ekg.graph import store as store_mod
+from e2ekg.graph.uris import change_uri
+from e2ekg.scenario.hero import hero_scenario
+from e2ekg.scenario.variants import variant_scenarios
+
+HERO = hero_scenario()
+ALERT, ALERT_APP = "radar-09000", "homepage-graphql"
+WINDOW = {"start": "2026-10-14T21:00Z", "end": "2026-10-14T23:00Z"}
+GRAPH_TOOLS = {"find_symptom", "dependency_closure", "changes_in_window", "anomalies_in_window",
+               "log_spikes", "trace_edges", "alerts_incidents", "similar_incidents",
+               "chat_claims", "causal_chains", "refutation_check", "raw_evidence",
+               "sparql_select", "record_finding", "read_findings"}
+FIRST_CALL = {"topology": ("trace_edges", WINDOW | {"apps": []}),
+              "change": ("changes_in_window", WINDOW | {"apps": []}),
+              "metrics": ("anomalies_in_window", WINDOW | {"apps": []}),
+              "logs": ("log_spikes", WINDOW | {"apps": []}),
+              "traces": ("trace_edges", WINDOW | {"apps": []}),
+              "alerts_incidents": ("find_symptom", {"alert_id": ALERT}),
+              "history": ("chat_claims", {"channel": "INC-5377", "kinds": []})}
+
+
+def _call(name: str, args: dict, i: int = 0) -> dict:
+    return {"name": name, "args": args, "id": f"{name}-{i}"}
+
+
+def _last(messages, name: str) -> str:
+    return next(m.content for m in reversed(messages)
+                if isinstance(m, ToolMessage) and m.name == name)
+
+
+def _specialist(bound: frozenset[str]) -> str:
+    return next(n for n, t in SPECIALISTS.items() if bound & GRAPH_TOOLS == {*t, "record_finding"})
+
+
+def investigator(offered: dict, transcript: list):
+    """The scripted policy: the commander follows its prompt's six steps; each specialist
+    makes one call, records a finding citing the first URI it got back, and reports."""
+    def policy(messages, bound):
+        transcript.extend(m.content for m in messages if isinstance(m, ToolMessage))
+        n = sum(isinstance(m, AIMessage) for m in messages)
+        if "task" in bound:
+            offered["commander"] = bound
+            return commander(messages, n)
+        name = _specialist(bound)
+        offered[name] = bound
+        return specialist(name, messages, n)
+    return policy
+
+
+def commander(messages, n: int) -> AIMessage:
+    if n == 0:
+        return AIMessage("", tool_calls=[_call("find_symptom", {"alert_id": ALERT})])
+    if n == 1:
+        return AIMessage("", tool_calls=[
+            _call("task", {"subagent_type": s, "description": f"Alert {ALERT} on {ALERT_APP} at "
+                           f"2026-10-14T22:30Z; window {WINDOW['start']} to {WINDOW['end']}."}, i)
+            for i, s in enumerate(SPECIALISTS)])
+    if n == 2:
+        symptom = json.loads(_last(messages, "find_symptom"))["symptom_uri"]
+        return AIMessage("", tool_calls=[_call("read_findings", {}),
+                                         _call("causal_chains", {"symptom_uri": symptom})])
+    if n == 3:
+        roots = [c["links"][0][3] for c in json.loads(_last(messages, "causal_chains"))]
+        cited = [u for f in json.loads(_last(messages, "read_findings")) for u in f["cites"]
+                 if "/chg/" in u]
+        return AIMessage("", tool_calls=[_call("refutation_check", {
+            "alert_id": ALERT, "candidate_uris": sorted({*roots, *cited})})])
+    checked = json.loads(_last(messages, "refutation_check"))["candidates"]
+    alive = [c for c in checked if c.get("survives")]
+    refuted = [f"{c['uri']} refuted: {c['refuted_by'][0]}" for c in checked
+               if c.get("survives") is False]
+    report = {"verdict": "root_cause_found" if alive else "inconclusive",
+              "hypotheses": [{"root_cause_uri": c["uri"], "chain": [c["uri"]],
+                              "confidence": c["chain_conf"] or 0.5, "evidence": [c["uri"]],
+                              "refuted_alternatives": refuted} for c in alive],
+              "summary": "scripted"}
+    return AIMessage("", tool_calls=[_call("RCAReport", report)])
+
+
+def specialist(name: str, messages, n: int) -> AIMessage:
+    tool, args = FIRST_CALL[name]
+    if n == 0:
+        return AIMessage("", tool_calls=[_call(tool, args)])
+    if n == 1:
+        out = json.loads(_last(messages, tool))
+        rows = [out["alert"]] if isinstance(out, dict) else out
+        row = next((r for r in rows if r.get("uri")), None)
+        if row is None:
+            return AIMessage("no finding")
+        return AIMessage("", tool_calls=[_call("record_finding", {"f": {
+            "about_app": row.get("app") or row.get("callee") or ALERT_APP,
+            "claim": f"{name} saw {row['uri']}", "signal_uris": [row["uri"]],
+            "confidence": 0.5}})])
+    return AIMessage(f"finding {_last(messages, 'record_finding')}")
+
+
+@pytest.fixture(scope="module")
+def hero_root(tmp_path_factory, harvested_hero, harvested_hero_as_of, preprocessed_hero):
+    """A data root laid out like data/: the as-of store, and beside it the full store and the
+    answer key the agent must never reach."""
+    root = tmp_path_factory.mktemp("data")
+    for link, target in {"raw/hero": preprocessed_hero.raw,
+                         "raw/_answers": preprocessed_hero.answers,
+                         "processed/hero": preprocessed_hero.proc,
+                         "graph/hero/store": harvested_hero.out / "store",
+                         "graph/hero/as_of": harvested_hero_as_of.out}.items():
+        (root / link).parent.mkdir(parents=True, exist_ok=True)
+        (root / link).symlink_to(target)
+    return root
+
+
+@pytest.fixture(scope="module")
+def uris(harvested_hero_as_of) -> dict[str, str]:
+    answers = json.loads((harvested_hero_as_of.answers / "hero.json").read_text())
+    ext = {v: k for k, v in answers["external_ids"].items()}
+    return {c.id: str(change_uri("hero", c.kind, ext[c.id])) for c in HERO.changes if c.id in ext}
+
+
+@pytest.fixture(scope="module")
+def scripted_run(hero_root, scripted_llm, harvested_hero_as_of):
+    """One run_rca over `hero_root` with the scripted model, recording every store opened and
+    every file Python opened while it ran."""
+    offered, transcript, stores, files = {}, [], [], []
+    real_init = store_mod.Store.__init__
+
+    def recording_init(self, path, read_only=False):
+        stores.append((Path(path) if path else None, read_only))
+        real_init(self, path, read_only)
+
+    def audit(event, args):
+        if event == "open" and recording:
+            files.append(str(args[0]))
+
+    before = harvested_hero_as_of.store.quad_count()
+    mp = pytest.MonkeyPatch()
+    mp.setattr(store_mod.Store, "__init__", recording_init)
+    recording = [True]
+    sys.addaudithook(audit)
+    try:
+        report = run_rca(ALERT, "hero", root=hero_root, llm=scripted_llm,
+                         model=fake_tool_model(investigator(offered, transcript)),
+                         evidence_root=hero_root / "agent" / "hero")
+    finally:
+        recording.clear()
+        mp.undo()
+    return {"report": report, "offered": offered, "transcript": transcript, "stores": stores,
+            "files": files, "quads_before": before}
+
+
+def test_agent_builds_with_seven_specialists(harvested_hero_as_of, scripted_llm):
+    h = harvested_hero_as_of
+    agent = build_autorca(h.store, h.proc, "hero", model=fake_tool_model(), llm=scripted_llm,
+                          evidence_root=h.out.parent / "agent")
+    assert set(subagent_names(agent)) == set(SPECIALISTS) and len(SPECIALISTS) == 7
+
+
+@pytest.mark.parametrize("name", SPECIALISTS)
+def test_specialist_tool_isolation(harvested_hero_as_of, scripted_llm, name):
+    h = harvested_hero_as_of
+    subs = {s["name"]: s for s in build_specialists(h.store, h.proc, "hero", llm=scripted_llm)}
+    assert tool_names(subs[name]) == {*SPECIALISTS[name], "record_finding"}
+    assert tool_names(subs["logs"]) == {"log_spikes", "raw_evidence", "record_finding"}
+
+
+def test_each_agent_is_offered_only_its_own_graph_tools(scripted_run):
+    offered = scripted_run["offered"]
+    assert set(offered) == {"commander", *SPECIALISTS}
+    for name, tools in SPECIALISTS.items():
+        assert offered[name] & GRAPH_TOOLS == {*tools, "record_finding"}, name
+    assert offered["commander"] & GRAPH_TOOLS == set(autorca.COMMANDER_TOOLS)
+    assert "execute" not in set().union(*offered.values())
+
+
+def test_the_scripted_investigation_names_the_root_and_refutes_every_herring(scripted_run, uris):
+    r = scripted_run["report"]
+    assert isinstance(r, RCAReport) and r.verdict == "root_cause_found"
+    top = r.hypotheses[0]
+    assert top.root_cause_uri == uris["chg-cfg-0001"]
+    refuted = {a.split(" ", 1)[0] for a in top.refuted_alternatives}
+    assert {uris[h] for h in HERO.answer_key.red_herring_change_ids} <= refuted
+
+
+def test_every_specialist_with_a_signal_recorded_a_finding(scripted_run):
+    findings = json.loads(next(t for t in scripted_run["transcript"]
+                               if t.startswith('[{"uri":"https://kg.local/ops/finding/')))
+    assert {f["specialist"] for f in findings} == set(SPECIALISTS)
+
+
+def test_the_findings_never_reach_the_store_on_disk(scripted_run, harvested_hero_as_of):
+    assert harvested_hero_as_of.store.quad_count() == scripted_run["quads_before"]
+
+
+def test_run_rca_opens_only_the_as_of_store(scripted_run, hero_root):
+    assert scripted_run["stores"][0] == (hero_root / "graph/hero/as_of/store", True)
+    assert all(p is None for p, _ in scripted_run["stores"][1:])
+
+
+def test_run_rca_never_opens_the_answer_key_or_the_full_store(scripted_run, hero_root):
+    assert scripted_run["files"], "the audit hook saw no file at all"
+    banned = [str(hero_root / "raw/_answers"), str(hero_root / "graph/hero/store"),
+              str((hero_root / "raw/_answers").resolve()),
+              str((hero_root / "graph/hero/store").resolve())]
+    assert not [f for f in scripted_run["files"] if any(f.startswith(b) for b in banned)]
+
+
+def test_nothing_the_agent_read_is_from_after_the_cutoff(scripted_run):
+    stamps = {s for t in scripted_run["transcript"]
+              for s in re.findall(r"2026-10-1\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z", t)}
+    assert stamps and all(s[:16] <= "2026-10-14T23:00" for s in stamps)
+
+
+def prober(transcript: list, calls: list[dict]):
+    def policy(messages, bound):
+        transcript.extend(m.content for m in messages if isinstance(m, ToolMessage))
+        if not any(isinstance(m, AIMessage) for m in messages):
+            return AIMessage("", tool_calls=[_call(c["name"], c["args"], i)
+                                             for i, c in enumerate(calls)])
+        return AIMessage("", tool_calls=[_call("RCAReport", {
+            "verdict": "inconclusive", "hypotheses": [], "summary": "probe"})])
+    return policy
+
+
+def _probes(answers: Path) -> list[dict]:
+    blob = (answers / "hero.json").read_bytes()[:40]
+    forged = f"events|../_answers/hero.json|0|40|{hashlib.sha256(blob).hexdigest()[:16]}"
+    return [{"name": "sparql_select", "args": {"query": "SELECT ?i ?t WHERE { ?i inc:correctedAt ?t }"}},
+            {"name": "sparql_select", "args": {"query": 'SELECT ?s WHERE { ?s ?p ?o . '
+                                                        'FILTER(CONTAINS(STR(?o), "chg-cfg-0001")) }'}},
+            {"name": "raw_evidence", "args": {"uri_or_selector": forged}},
+            {"name": "glob", "args": {"pattern": "**/*", "path": "/"}},
+            {"name": "ls", "args": {"path": "/evidence/"}},
+            {"name": "read_file", "args": {"file_path": "/evidence/../../raw/_answers/hero.json"}}]
+
+
+def _probe(store, h, scripted_llm, evidence: Path) -> list[str]:
+    transcript = []
+    agent = build_autorca(store, h.proc, "hero", llm=scripted_llm, evidence_root=evidence,
+                          model=fake_tool_model(prober(transcript, _probes(h.answers))))
+    agent.invoke({"messages": [HumanMessage("probe")]})
+    return transcript
+
+
+def test_the_agents_own_tools_cannot_reach_the_answer_key_or_the_full_store(
+        harvested_hero_as_of, scripted_llm, tmp_path):
+    h = harvested_hero_as_of
+    correction, root_id, forged, glob, ls, read = _probe(h.store, h, scripted_llm, tmp_path)
+    assert json.loads(correction) == [] and json.loads(root_id) == []
+    assert json.loads(forged) == []
+    for listing in (glob, ls):
+        assert "_answers" not in listing and "hero.json" not in listing
+    assert "red_herring" not in read and "chg-cfg-0001" not in read
+
+
+def test_the_same_probe_over_the_full_store_does_see_the_correction(
+        harvested_hero, harvested_hero_as_of, scripted_llm, tmp_path):
+    h = harvested_hero_as_of
+    correction = _probe(harvested_hero.store, h, scripted_llm, tmp_path)[0]
+    assert json.loads(correction)
+
+
+def _answer_key_terms() -> set[str]:
+    """Every app on any scenario's causal chain, every root and herring change, their apps
+    and distinctive aliases, and the words that would give the game away."""
+    generic = {"search", "profiles", "entitlements"}
+    terms = {"TMS", "TBL", "herring", "red herring", "root_cause_change_id", "_answers"}
+    for s in (HERO, *variant_scenarios()):
+        ak, by_id = s.answer_key, {c.id: c for c in s.changes}
+        apps = {link.app for link in ak.causal_chain}
+        for cid in (ak.root_cause_change_id, *ak.red_herring_change_ids):
+            if cid:
+                terms.add(cid)
+                apps.add(by_id[cid].app)
+                terms |= {v for v in by_id[cid].attrs.values() if len(v) > 3}
+        catalog = {a.id: a for a in s.catalog}
+        terms |= apps | {al for a in apps for al in catalog[a].aliases} - generic
+    return terms
+
+
+def test_prompts_name_no_app_change_or_answer_from_any_scenario(harvested_hero_as_of):
+    answers = json.loads((harvested_hero_as_of.answers / "hero.json").read_text())
+    terms = _answer_key_terms() | set(answers["external_ids"])
+    prompts = {p.name: p.read_text() for p in PROMPTS.glob("*.md")}
+    assert set(prompts) == {f"{n}.md" for n in [*SPECIALISTS, "autorca"]}
+    hits = {(name, t) for name, text in prompts.items() for t in terms
+            if re.search(rf"(?<![\w-]){re.escape(t)}(?![\w-])", text, re.I)}
+    assert not hits
+
+
+def test_the_leak_grep_would_catch_an_app_name():
+    terms = _answer_key_terms()
+    assert {"title-metadata-svc", "api-gateway", "chg-cfg-0001", "TMS"} <= terms
+
+
+@pytest.mark.parametrize("name", SPECIALISTS)
+def test_every_specialist_prompt_ends_with_the_reporting_rule(name):
+    assert (PROMPTS / f"{name}.md").read_text().rstrip().endswith(
+        "Report only through record_finding. Return one line naming the finding URIs.")
+
+
+class LiveLog(UsageMetadataCallbackHandler):
+    """Token usage (the parent's), plus model calls and tool calls by name."""
+    def __init__(self):
+        super().__init__()
+        self.model_calls, self.tools, self.tool_errors = 0, Counter(), Counter()
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self.model_calls += 1
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        self.tools[(serialized or {}).get("name") or kwargs.get("name") or "?"] += 1
+
+    def on_tool_end(self, output, **kwargs):
+        text = getattr(output, "content", output)
+        if isinstance(text, str) and text.startswith("error"):
+            self.tool_errors[kwargs.get("name") or "?"] += 1
+
+
+@pytest.mark.live
+def test_live_hero_rca(tmp_path):
+    if not os.environ.get("FIREWORKS_API_KEY"):
+        pytest.skip("FIREWORKS_API_KEY is not set")
+    log, t0, report, failure = LiveLog(), time.perf_counter(), None, None
+    try:
+        report = run_rca(ALERT, "hero", evidence_root=tmp_path, callbacks=[log])
+    except Exception as e:
+        failure = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        out = Path(".cache") / f"live_hero_rca-{datetime.now(UTC):%Y%m%dT%H%M%SZ}.json"
+        out.write_text(json.dumps({
+            "wall_s": round(time.perf_counter() - t0, 1), "model_calls": log.model_calls,
+            "usage": log.usage_metadata, "tools": log.tools, "tool_errors": log.tool_errors,
+            "failure": failure, "report": report and report.model_dump()},
+            indent=1, default=str))
+    r = report
+    answers = json.loads(Path("data/raw/_answers/hero.json").read_text())
+    ext = {v: k for k, v in answers["external_ids"].items()}
+    root = str(change_uri("hero", "config_change", ext["chg-cfg-0001"]))
+    assert r.verdict == "root_cause_found"
+    assert r.hypotheses[0].root_cause_uri == root
+    assert _reaches(r.hypotheses[0].evidence, set(answers["evidence_raw_ids"]))
+
+
+def _reaches(uris: list[str], evidence_ids: set[str]) -> set[str]:
+    """The cited URIs whose raw records (their own, or those of what they derive from or
+    cite) include an answer-key evidence record."""
+    from e2ekg.graph.store import Store
+    from e2ekg.preprocess.selector import selected_raw_ids
+    store, proc = Store(Path("data/graph/hero/as_of/store"), read_only=True), Path("data/processed/hero")
+    hits = set()
+    for u in uris:
+        if not u.startswith("https://kg.local/"):
+            continue
+        vals = [r["v"] for r in store.query(
+            "PREFIX ops: <https://kg.local/ops#> PREFIX prov: <http://www.w3.org/ns/prov#> "
+            f"SELECT DISTINCT ?v WHERE {{ <{u}> (prov:wasDerivedFrom|ops:cites)* ?x . "
+            "?x ops:rawSelector ?v }")]
+        ids = {v for v in vals if not v.startswith("{")}
+        ids |= selected_raw_ids(proc, [v for v in vals if v.startswith("{")])
+        if ids & evidence_ids:
+            hits.add(u)
+    return hits
+
+
+def test_rca_cli_prints_the_report_and_exits_on_the_verdict(monkeypatch, capsys, tmp_path):
+    from e2ekg.cli import main
+    seen = {}
+
+    def fake_run(alert, scenario, *, root, evidence_root):
+        seen.update(alert=alert, scenario=scenario, root=root, evidence=evidence_root)
+        return RCAReport(verdict="inconclusive", hypotheses=[], summary="nothing survived")
+    monkeypatch.setattr(autorca, "run_rca", fake_run)
+    code = main(["rca", "--scenario", "hero", "--alert", ALERT, "--root", str(tmp_path)])
+    assert code == 1 and seen == {"alert": ALERT, "scenario": "hero", "root": tmp_path,
+                                  "evidence": None}
+    assert json.loads(capsys.readouterr().out)["summary"] == "nothing survived"
