@@ -83,3 +83,32 @@ def select(proc_root: Path, sel: Selector) -> pl.DataFrame:
 
 def minute_end(t: datetime) -> datetime:
     return t + timedelta(minutes=1)
+
+
+def selected_raw_ids(proc_root: Path, selectors: list[str]) -> set[str]:
+    """Raw ids of every row any of `selectors` (JSON) selects, in one DuckDB join per source."""
+    by_source: dict[str, list[dict]] = {s: [] for s in SOURCES}
+    for s in set(selectors):
+        x = Selector.from_json(s)
+        by_source[x.source].append({"app_uri": x.app_uri, "key": x.key,
+                                    "t_start": x.t_start, "t_end": x.t_end})
+    schema = {"app_uri": pl.String, "key": pl.String,
+              "t_start": pl.Datetime("us", "UTC"), "t_end": pl.Datetime("us", "UTC")}
+    out: set[str] = set()
+    con = duckdb.connect()
+    try:
+        for source, rows in by_source.items():
+            if not rows:
+                continue
+            con.register("sel", pl.DataFrame(rows, schema=schema).to_arrow())
+            rows_file = rows_path(proc_root, source).as_posix()
+            out |= {r[0] for r in con.execute(
+                f"SELECT DISTINCT r.raw_id FROM read_parquet('{rows_file}') r "
+                "JOIN sel s ON r.app_uri IS NOT DISTINCT FROM s.app_uri "
+                "AND (s.key IS NULL OR r.key = s.key) "
+                "AND ((s.t_start = s.t_end AND r.ts_utc IS NULL) "
+                "OR (r.ts_utc >= s.t_start AND r.ts_utc < s.t_end))").fetchall()}
+            con.unregister("sel")
+    finally:
+        con.close()
+    return out

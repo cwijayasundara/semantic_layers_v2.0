@@ -176,12 +176,45 @@ def _add_ledger(sub) -> None:
     p.set_defaults(func=_cmd_ledger)
 
 
+def _cmd_harvest(args: argparse.Namespace) -> int:
+    from e2ekg.graph.harvest import harvest, make_context
+    proc, out = Path(args.proc), Path(args.out)
+    llm = make_llm(args.llm)
+    bad = 0
+    for name in _raw_scenarios(proc, args.scenario):
+        t = time.perf_counter()
+        ctx = make_context(name, proc / name, out / name, llm=llm)
+        r = harvest(ctx, out=out / name, shacl=not args.no_shacl)
+        failed = sorted(k for k, v in r.results.items() if not v.success)
+        shacl = {True: "clean", False: "VIOLATIONS", None: "skipped"}[r.shacl_ok]
+        print(f"{name}: {r.quads} quads, SHACL {shacl}, failed enrichers "
+              f"{', '.join(failed) or 'none'} in {time.perf_counter() - t:.1f}s", flush=True)
+        for k in failed:
+            print(f"  {k}: {r.results[k].error}")
+        if r.shacl_ok is False:
+            print(r.shacl_text[:4000])
+        bad += bool(failed) or r.shacl_ok is False
+    return 1 if bad else 0
+
+
+def _add_harvest(sub) -> None:
+    p = sub.add_parser("harvest", help="load processed tables into the knowledge graph")
+    p.add_argument("--scenario", default="hero", help="hero, a v-... variant, or all")
+    p.add_argument("--proc", default="data/processed", help="processed root")
+    p.add_argument("--out", default="data/graph", help="graph root (<out>/<scenario>/store)")
+    p.add_argument("--llm", choices=("none", "scripted", "fireworks"), default="none",
+                   help="identity picks for names the catalog does not match outright")
+    p.add_argument("--no-shacl", action="store_true", help="skip SHACL validation")
+    p.set_defaults(func=_cmd_harvest)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="e2ekg")
     sub = parser.add_subparsers(dest="command", required=True)
     _add_generate(sub)
     _add_preprocess(sub)
     _add_ledger(sub)
+    _add_harvest(sub)
     return parser
 
 

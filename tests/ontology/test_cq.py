@@ -1,7 +1,16 @@
 """Competency questions: the runner, the expected files, and the CQs
-themselves against the reference ABox. The real-store test waits for Task 12 (R8)."""
+themselves against the reference ABox and the harvested store (Task 12, R8/R25).
+
+The committed expected files are for the FULL-SCALE hero (R25). The default
+run harvests the 0.05 fixture, so `test_cq` re-derives the expectations from
+that fixture's own answers (`_derive_expected.derive(answers=...)`, written to
+tmp) and compares against those. `test_cq_full_scale` (slow) compares the
+full-scale harvest (`e2ekg harvest --scenario hero`, store at
+data/graph/hero/store or $E2EKG_FULL_STORE) against the committed files."""
 import json
+import os
 import re
+from pathlib import Path
 
 import pyoxigraph as ox
 import pytest
@@ -12,16 +21,62 @@ from rdflib.namespace import RDF
 from e2ekg.graph.shacl import (
     CQ_DIR, ENRICHER_NAMES, LATER_STAGES, cq_question, cq_requires, expected, run_cq, validate,
 )
+from e2ekg.graph.store import Store
 from e2ekg.graph.uris import NS, app_uri, change_uri
 
 OPS = NS["ops"]
 CQS = sorted(CQ_DIR.glob("*.rq"))
 
 
-@pytest.mark.skip(reason="store built in Task 12")
+def _gate(cq: Path) -> None:
+    later = cq_requires(cq) & LATER_STAGES
+    if later:
+        pytest.skip(f"{cq.stem} requires {sorted(later)} (Task 13 correlation)")
+
+
+@pytest.fixture(scope="session")
+def fixture_expected(harvested_hero, derive_module, tmp_path_factory) -> Path:
+    """The CQs re-derived from the 0.05 fixture's own generation (R25), as
+    `<stem>.rq` + `<stem>.expected.json` pairs in tmp."""
+    d = tmp_path_factory.mktemp("cq_fixture")
+    for stem, payload in derive_module.derive(answers=harvested_hero.answers).items():
+        (d / f"{stem}.rq").write_text((CQ_DIR / f"{stem}.rq").read_text())
+        (d / f"{stem}.expected.json").write_text(json.dumps(payload, indent=2) + "\n")
+    return d
+
+
 @pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
-def test_cq(cq, harvested_hero_store):          # fixture built in Task 12
-    assert run_cq(harvested_hero_store, cq) == expected(cq)
+def test_cq(cq, harvested_hero_store, fixture_expected):
+    _gate(cq)
+    mine = fixture_expected / cq.name
+    assert run_cq(harvested_hero_store, mine) == expected(mine)
+
+
+FULL_STORE = Path(os.environ.get("E2EKG_FULL_STORE",
+                                  CQ_DIR.parents[1] / "data" / "graph" / "hero" / "store"))
+
+
+@pytest.fixture(scope="module")
+def full_scale_store():
+    if not FULL_STORE.is_dir():
+        pytest.skip(f"no full-scale hero harvest at {FULL_STORE}; run "
+                    "`uv run e2ekg harvest --scenario hero --llm scripted` first")
+    return Store(FULL_STORE, read_only=True)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cq", CQS, ids=lambda p: p.stem)
+def test_cq_full_scale(cq, full_scale_store):
+    _gate(cq)
+    assert run_cq(full_scale_store, cq) == expected(cq)
+
+
+def test_cq05_held_is_a_boolean_that_compares_as_the_string_false(harvested_hero_store,
+                                                                   fixture_expected):
+    p = fixture_expected / next(c.name for c in CQS if c.name.startswith("05-"))
+    (row,) = run_cq(harvested_hero_store, p)
+    assert dict(row)["held"] == "false"
+    assert json.loads(p.with_suffix(".expected.json").read_text())["rows"][0]["held"] == "false"
 
 
 # --- the suite itself ---------------------------------------------------------

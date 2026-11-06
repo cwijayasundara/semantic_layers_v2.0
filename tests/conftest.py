@@ -1,7 +1,8 @@
 """Shared pytest config. Helpers live in tests/helpers.py (importable as `helpers`).
 
-Session fixture: a scale-0.05 hero raw tree preprocessed once with the
-scripted LLM (so the chat tables exist). The generator builds the fixture (tests may use it);
+Session fixtures: a scale-0.05 hero raw tree preprocessed once with the
+scripted LLM (so the chat tables exist), and that tree harvested once into an
+on-disk Oxigraph store. The generator builds the fixture (tests may use it);
 the pipeline under test never imports `e2ekg.generate` (R6). Tests may read
 `_answers/` (the oracle), the pipeline may not (R5)."""
 from dataclasses import dataclass
@@ -18,6 +19,15 @@ class Preprocessed:
     proc: Path       # <tmp>/processed/hero
     answers: Path    # <tmp>/raw/_answers
     report: object   # PreprocessReport
+
+
+@dataclass(frozen=True)
+class Harvested:
+    store: object    # e2ekg.graph.store.Store
+    report: object   # HarvestReport
+    proc: Path
+    answers: Path
+    out: Path        # the harvest output directory (store/ and harvest.ttl)
 
 
 @pytest.fixture(scope="session")
@@ -37,3 +47,18 @@ def preprocessed_hero(tmp_path_factory, scripted_llm) -> Preprocessed:
     proc = base / "processed" / "hero"
     report = preprocess_scenario(raw, proc, llm=scripted_llm)
     return Preprocessed(raw=raw, proc=proc, answers=base / "raw" / "_answers", report=report)
+
+
+@pytest.fixture(scope="session")
+def harvested_hero(tmp_path_factory, preprocessed_hero, scripted_llm) -> Harvested:
+    from e2ekg.graph.harvest import harvest, make_context
+    out = tmp_path_factory.mktemp("graph") / "hero"
+    ctx = make_context("hero", preprocessed_hero.proc, out, llm=scripted_llm)
+    report = harvest(ctx, out=out)
+    return Harvested(store=ctx.store, report=report, proc=preprocessed_hero.proc,
+                     answers=preprocessed_hero.answers, out=out)
+
+
+@pytest.fixture(scope="session")
+def harvested_hero_store(harvested_hero):
+    return harvested_hero.store
