@@ -28,6 +28,13 @@ def preprocessed_hero(tmp_path_factory) -> Preprocessed:
     raw = base / "raw" / "hero"
     generate_scenario(hero_scenario(), raw, scale=FIXTURE_SCALE)
     proc = base / "processed" / "hero"
-    report = preprocess_scenario(raw, proc, llm=None)
+    from fixtures.scripted_llm import ScriptedClient
+    report = preprocess_scenario(raw, proc, llm=ScriptedClient())
     return Preprocessed(raw=raw, proc=proc, answers=base / "raw" / "_answers", report=report)
 
+
+
+@pytest.fixture(scope="session")
+def scripted_llm():
+    from fixtures.scripted_llm import ScriptedClient
+    return ScriptedClient()

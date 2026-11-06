@@ -64,7 +64,8 @@ def build_fingerprints(proc: Path, span_skew: dict[str, int] | None = None) -> d
     log_spikes(logs).write_parquet(d / "fp_log_spikes.parquet", compression="zstd")
     tcols = logs.select("raw_id", "template_id", "template", "params").lazy()
     _replace_parquet(proc / "logs.parquet",
-                     pl.scan_parquet(proc / "logs.parquet").join(tcols, on="raw_id", how="left"))
+                     pl.scan_parquet(proc / "logs.parquet").join(
+                         tcols, on="raw_id", how="left", maintain_order="left"))
     del logs, tcols
 
     # metrics
@@ -94,7 +95,7 @@ def build_fingerprints(proc: Path, span_skew: dict[str, int] | None = None) -> d
     scols = spans.select("raw_id", "span_index", "orphan", "ts_utc_corrected").lazy()
     _replace_parquet(proc / "spans.parquet",
                      pl.scan_parquet(proc / "spans.parquet").join(
-                         scols, on=["raw_id", "span_index"], how="left"))
+                         scols, on=["raw_id", "span_index"], how="left", maintain_order="left"))
     for t in FP_TABLES:
         counts[t] = pl.scan_parquet(d / f"{t}.parquet").select(pl.len()).collect().item()
     return counts

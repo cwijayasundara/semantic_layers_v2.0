@@ -22,6 +22,7 @@ from typing import Any
 
 import polars as pl
 
+from e2ekg.preprocess.chat_extract import extract_chat_full
 from e2ekg.preprocess.fingerprints import build_fingerprints
 from e2ekg.preprocess.identity import Resolver, catalog_from_table, resolve_tables
 from e2ekg.preprocess.ledger import check_coverage
@@ -70,6 +71,7 @@ class PreprocessReport:
     skew: dict[str, dict[str, int]] = field(default_factory=dict)
     coverage: dict[str, Any] = field(default_factory=dict)
     fingerprints: dict[str, int] = field(default_factory=dict)   # fp table -> rows
+    chat: dict[str, int] = field(default_factory=dict)           # extraction counts
     identity: dict[str, dict[str, int]] = field(default_factory=dict)  # table -> method -> rows
     seconds: float = 0.0
 
@@ -255,6 +257,13 @@ def preprocess_scenario(raw_root: Path, processed_root: Path, llm: Any = None) -
                        "first_gaps": [g.raw_id for g in cov.gaps[:20]],
                        "first_overlaps": [o.raw_id for o in cov.overlaps[:20]]}
     report.fingerprints = build_fingerprints(out, report.skew.get("spans"))
+    if llm is not None:  # chat labels come only from the closed-output LLM call; no LLM, no labels
+        msgs, claims, q = extract_chat_full(pl.read_parquet(out / "slack.parquet"), resolver, llm)
+        for name, frame in (("chat_messages", msgs), ("chat_claims", claims),
+                            ("chat_quarantine", q)):
+            frame.write_parquet(out / "derived" / f"{name}.parquet", compression="zstd")
+        report.chat = {"messages": msgs.height, "claims": claims.height,
+                       "unclassified": q.height}
     report.quarantine = {r: report.quarantine.get(r, 0) for r in REASONS}
     report.seconds = round(time.perf_counter() - t0, 2)
     (out / "ledger.json").write_text(json.dumps(asdict(report), indent=1, sort_keys=True))

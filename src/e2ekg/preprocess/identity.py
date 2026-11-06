@@ -255,7 +255,7 @@ def resolve_tables(proc: Path, resolver: Resolver) -> dict[str, dict[str, int]]:
                           "app_confidence": [r.confidence for r in res]},
                          schema={"_surf": pl.String, "app_uri": pl.String,
                                  "app_method": pl.String, "app_confidence": pl.Float64})
-        out = (lf.join(m.lazy(), on="_surf", how="left")
+        out = (lf.join(m.lazy(), on="_surf", how="left", maintain_order="left")
                .with_columns(app_method=pl.col("app_method").fill_null("unresolved"),
                              app_confidence=pl.col("app_confidence").fill_null(0.0))
                .drop("_surf"))
