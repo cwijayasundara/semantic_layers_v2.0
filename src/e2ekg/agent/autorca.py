@@ -15,6 +15,7 @@ from deepagents import (GeneralPurposeSubagentProfile, HarnessProfile, create_de
                         register_harness_profile)
 from deepagents._models import get_model_identifier, get_model_provider
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from langchain.agents.structured_output import ToolStrategy
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -46,6 +47,8 @@ def _seven_specialists_only(chat: BaseChatModel) -> None:
                        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))
 
 
+# ToolStrategy, not the provider's response_format: with a JSON schema bound, GLM-5.3-flash
+# wrote a report at once, with no tool call (live run 1).
 def build_autorca(store: Store, proc_root: Path, scenario: str,
                   model: str | BaseChatModel = f"fireworks:{MODEL_ID}", *, llm=None,
                   as_of: datetime | None = None, evidence_root: Path | None = None):
@@ -62,7 +65,7 @@ def build_autorca(store: Store, proc_root: Path, scenario: str,
     return create_deep_agent(
         model=chat, tools=[tools[n] for n in COMMANDER_TOOLS], system_prompt=prompt("autorca"),
         subagents=build_specialists(work, proc_root, scenario, llm=llm, as_of=as_of),
-        response_format=RCAReport, name="autorca",
+        response_format=ToolStrategy(RCAReport), name="autorca",
         backend=CompositeBackend(default=StateBackend(), routes={
             "/evidence/": FilesystemBackend(root_dir=evidence, virtual_mode=True)}))
 
