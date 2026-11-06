@@ -110,22 +110,61 @@ def test_selector_round_trip(preprocessed_hero):
                 assert got.height == row["n"]
 
 
-def test_synthetic_change_point_and_reset():
+def _anomalies_of(vals, step_min=1, name="server.latency.p50"):
     from datetime import UTC, datetime, timedelta
     t0 = datetime(2026, 10, 14, 19, tzinfo=UTC)
-    ts = [t0 + timedelta(minutes=m) for m in range(120)]
-    vals = [10.0 + (m % 3) * 0.1 if m < 70 else 40.0 + (m % 3) * 0.1 for m in range(120)]
-    atlas = pl.DataFrame({"raw_id": [f"a{i}" for i in range(120)], "app_uri": ["x"] * 120,
+    n = len(vals)
+    ts = [t0 + timedelta(minutes=m * step_min) for m in range(n)]
+    atlas = pl.DataFrame({"raw_id": [f"a{i}" for i in range(n)], "app_uri": ["x"] * n,
                           "ts_utc": pl.Series(ts).dt.replace_time_zone("UTC"),
-                          "metric": ["server.latency.p50"] * 120,
-                          "tags": ['{"nf.app":"x"}'] * 120, "value": vals})
+                          "metric": [name] * n, "tags": ['{"nf.app":"x"}'] * n,
+                          "value": vals})
     prom = pl.DataFrame(schema={"raw_id": pl.String, "prom_kind": pl.String,
                                 "app_uri": pl.String, "ts_utc": atlas["ts_utc"].dtype,
                                 "metric": pl.String, "labels": pl.String, "value": pl.Float64})
-    a = metric_anomalies(clean_metrics(atlas, prom))
+    return t0, atlas, prom, metric_anomalies(clean_metrics(atlas, prom))
+
+
+def test_synthetic_change_point_and_reset():
+    from datetime import timedelta
+    vals = [10.0 + (m % 3) * 0.1 if m < 70 else 40.0 + (m % 3) * 0.1 for m in range(120)]
+    t0, atlas, prom, a = _anomalies_of(vals)
     assert a.height == 1 and a["direction"][0] == "up"
     assert abs((a["t_start"][0] - (t0 + timedelta(minutes=70))).total_seconds()) <= 300
     assert metric_row_keys(atlas, prom).height == 120
+
+
+# title-batch-loader grpc_client_pool_connections{state=active}, a 5-minute scrape series:
+# noise 20..31, a two-point dip to 20 (inside that range), then the real step to 64.
+POOL_ACTIVE = [31, 20, 23, 24, 30, 29, 30, 25, 22, 27, 28, 20, 31, 21, 22, 25, 29, 30, 25, 20,
+               29, 24, 21, 24, 22, 23, 27, 31, 26, 22, 28, 28, 28, 30, 25, 20, 20, 29]
+
+
+def test_two_point_dip_inside_noise_on_a_sparse_series_is_not_an_anomaly():
+    """With a 5-minute scrape the 10-minute recent window held 3 points and the 30-minute
+    baseline 6, so two low points flipped the median and 6 points gave a MAD far below the
+    series' real spread: a dip inside the normal range scored 5.4 sigma."""
+    *_, a = _anomalies_of([float(v) for v in POOL_ACTIVE], step_min=5,
+                          name="grpc_client_pool_connections")
+    assert a.height == 0
+
+
+def test_real_step_on_a_sparse_series_is_still_detected_at_its_onset():
+    from datetime import timedelta
+    vals = [float(v) for v in POOL_ACTIVE] + [64.0] * 34
+    t0, _, _, a = _anomalies_of(vals, step_min=5, name="grpc_client_pool_connections")
+    assert a.height == 1 and a["direction"][0] == "up"
+    assert abs((a["t_start"][0] - (t0 + timedelta(minutes=5 * 38))).total_seconds()) <= 600
+
+
+def test_magnitude_stays_finite_when_the_baseline_is_zero():
+    """grpc.client.pool.waiting is 0 until the incident: dividing by a ~0 spread gave 1.8e11."""
+    import numpy as np
+    rng = np.random.default_rng(3)
+    vals = [0.0] * 40 + [float(v) for v in rng.integers(150, 210, 32)]
+    *_, a = _anomalies_of(vals, step_min=5, name="grpc.client.pool.waiting")
+    assert a.height == 1 and a["direction"][0] == "up"
+    assert np.isfinite(a["magnitude"][0]) and a["magnitude"][0] < 1000
 
 
 def _propagation_set(p) -> set[str]:

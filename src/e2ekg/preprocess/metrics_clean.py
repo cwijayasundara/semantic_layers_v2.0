@@ -20,8 +20,10 @@
 
 `metric_anomalies` finds change points: at each point, the median of the last 10
 minutes against the median of the 30 minutes before that, scaled by the baseline's
-MAD (1.4826*MAD, floored at 5% of the baseline level so a flat series does not
-alarm on noise). |shift| >= 5 flags the point; consecutive flags make one anomaly that
+MAD (1.4826*MAD, floored at 5% of the baseline level, or of the series' mean level when
+the baseline is ~0, so a flat series does not alarm on noise and an idle-at-zero series
+keeps a finite magnitude). Windows hold at least 5 recent and 12 baseline points.
+|shift| >= 5 flags the point; consecutive flags make one anomaly that
 lasts until the smoothed level returns within 5 sigma of the pre-change baseline,
 whose start is backdated by the detector's lag (the recent median needs a majority of
 its window past the change)."""
@@ -41,6 +43,14 @@ RECENT_MIN, BASE_MIN, SHIFT_MIN, FLOOR_FRAC = 10, 30, 5.0, 0.05
 # diurnal curve and are noisy (reset streams, multi-interval gaps), so they need a 50%
 # level change; other series 10%. Sigma statistics alone flag a smooth trend.
 REL_MIN, COUNTER_REL_MIN, COUNTER_FLOOR_FRAC = 0.10, 0.50, 0.25
+# A sparse (5-minute) series gets few points in the minute-based windows, and a median of
+# 3 flips on 2 points while a MAD over 6 underestimates the real spread. Windows therefore
+# hold at least 5 recent points (a change must persist for 3) and 12 baseline points.
+MIN_RECENT_PTS, MIN_BASE_PTS = 5, 12
+# A baseline under 1% of the series' mean level is effectively zero and carries no scale
+# (grpc.client.pool.waiting idles at 0): the series' own level stands in, so a jump to it
+# scores 1/FLOOR_FRAC = 20 instead of 1e11.
+ZERO_BASE_FRAC = 0.01
 SECONDS_RATIO, MIN_PEERS = 1 / 50, 50
 APP_URI_PREFIX = "https://kg.local/app/application/"
 
@@ -210,8 +220,8 @@ def metric_anomalies(clean_df: pl.DataFrame) -> pl.DataFrame:
         n = int(idx.max()) + 1
         x = np.full(n, np.nan)
         x[idx] = g["v"].to_numpy()
-        r_n = max(3, round(RECENT_MIN * 60_000_000 / step))
-        b_n = max(6, round(BASE_MIN * 60_000_000 / step))
+        r_n = max(MIN_RECENT_PTS, round(RECENT_MIN * 60_000_000 / step))
+        b_n = max(MIN_BASE_PTS, round(BASE_MIN * 60_000_000 / step))
         pad = np.full(r_n + b_n, np.nan)
         xp = np.concatenate([pad, x])
         recent = sliding_window_view(xp, r_n)[b_n + 1: b_n + 1 + n]       # x[i-r_n+1 .. i]
@@ -225,7 +235,9 @@ def metric_anomalies(clean_df: pl.DataFrame) -> pl.DataFrame:
             (~np.isnan(recent)).sum(axis=1) >= 2)
         counter = g["name"][0].endswith("_total")
         floor = COUNTER_FLOOR_FRAC if counter else FLOOR_FRAC
-        sigma = np.maximum(1.4826 * mad, floor * np.abs(b_med))
+        level = np.nanmean(np.abs(x))
+        scale = np.where(np.abs(b_med) < ZERO_BASE_FRAC * level, level, np.abs(b_med))
+        sigma = np.maximum(1.4826 * mad, floor * scale)
         sigma = np.where(sigma > 0, sigma, 1e-9)
         shift = (rec_med - b_med) / sigma
         rel = np.abs(rec_med - b_med) / np.maximum(np.abs(b_med), 1e-12)
