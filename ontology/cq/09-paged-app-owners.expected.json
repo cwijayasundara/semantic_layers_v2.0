@@ -1,0 +1,17 @@
+{
+  "question": "Which teams own the applications that paged on-call during the incident window?",
+  "vars": [
+    "app",
+    "team"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/edge-gateway>",
+      "team": "Team Edge"
+    },
+    {
+      "app": "<https://kg.local/app/application/homepage-graphql>",
+      "team": "Team Discovery"
+    }
+  ]
+}

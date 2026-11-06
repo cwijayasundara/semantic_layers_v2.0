@@ -1,0 +1,14 @@
+{
+  "question": "Which applications had alerts fire inside the window before the live incident was opened?",
+  "vars": [
+    "app"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/edge-gateway>"
+    },
+    {
+      "app": "<https://kg.local/app/application/homepage-graphql>"
+    }
+  ]
+}

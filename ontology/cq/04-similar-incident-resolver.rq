@@ -1,0 +1,16 @@
+# Which engineer resolved an incident similar to this one last quarter, and which application did it affect?
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?handle ?pastApp WHERE {
+  ?live a ops:Incident ; ops:atTime ?t ; ops:similarTo ?past .
+  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+  ?past a ops:Incident ; ops:resolvedBy/team:handle ?handle ; ops:affects ?pastApp ;
+        ops:atTime ?pt .
+  FILTER(?pt >= "2026-07-01T00:00:00Z"^^xsd:dateTime && ?pt < "2026-10-01T00:00:00Z"^^xsd:dateTime)
+}

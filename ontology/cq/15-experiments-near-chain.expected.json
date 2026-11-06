@@ -1,0 +1,13 @@
+{
+  "question": "Which experiment allocations changed inside the window on applications downstream of the live incident's affected service?",
+  "vars": [
+    "change",
+    "app"
+  ],
+  "rows": [
+    {
+      "change": "<https://kg.local/chg/experiment_allocation/hero/chg-exp-0001>",
+      "app": "<https://kg.local/app/application/row-ranker>"
+    }
+  ]
+}

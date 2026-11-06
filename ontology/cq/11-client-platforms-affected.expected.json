@@ -1,0 +1,20 @@
+{
+  "question": "Which client platforms show a metric anomaly inside the incident window?",
+  "vars": [
+    "app"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/client-android>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-ios>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-tv>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-web>"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "question": "Which team owns each application on the highest-confidence causal chain explaining the live incident?",
+  "vars": [
+    "app",
+    "team"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/client-tv>",
+      "team": "Team Devices"
+    },
+    {
+      "app": "<https://kg.local/app/application/homepage-graphql>",
+      "team": "Team Discovery"
+    },
+    {
+      "app": "<https://kg.local/app/application/lolomo-svc>",
+      "team": "Team Discovery"
+    },
+    {
+      "app": "<https://kg.local/app/application/title-batch-loader>",
+      "team": "Team Content Platform"
+    },
+    {
+      "app": "<https://kg.local/app/application/title-metadata-svc>",
+      "team": "Team Content Platform"
+    }
+  ]
+}

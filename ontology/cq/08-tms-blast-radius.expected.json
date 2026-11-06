@@ -1,0 +1,35 @@
+{
+  "question": "Which applications transitively depend on title-metadata-svc (its blast radius)?",
+  "vars": [
+    "app"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/client-android>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-ios>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-tv>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-web>"
+    },
+    {
+      "app": "<https://kg.local/app/application/edge-gateway>"
+    },
+    {
+      "app": "<https://kg.local/app/application/homepage-graphql>"
+    },
+    {
+      "app": "<https://kg.local/app/application/lolomo-svc>"
+    },
+    {
+      "app": "<https://kg.local/app/application/row-ranker>"
+    },
+    {
+      "app": "<https://kg.local/app/application/title-batch-loader>"
+    }
+  ]
+}

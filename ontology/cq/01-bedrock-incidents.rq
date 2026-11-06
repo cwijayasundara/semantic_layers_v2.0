@@ -1,0 +1,18 @@
+# Which incidents affected applications owned by Team Bedrock in us-east-1?
+# Incident ids exist only after rendering, so each incident is identified by
+# its affected app, severity and opening time.
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?app ?severity ?opened WHERE {
+  ?team a ops:Team ; rdfs:label "Team Bedrock" .
+  ?app a ops:Application ; ops:ownedBy ?team ; ops:deployedIn ?region .
+  ?region a ops:Region ; rdfs:label "us-east-1" .
+  ?incident a ops:Incident ; ops:affects ?app ; ops:atTime ?opened ;
+            ops:severity/skos:notation ?severity .
+}

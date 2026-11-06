@@ -1,0 +1,40 @@
+# SKOS concept scheme: Sentiment. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/chat/sentiment/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/chat/scheme/sentiment> a skos:ConceptScheme ;
+    skos:prefLabel "Sentiment"@en ;
+    rdfs:comment "Verbatim from the post: sentiment IN [positive, neutral, negative, urgent]." ;
+    skos:hasTopConcept c:positive, c:neutral, c:negative, c:urgent .
+
+c:positive a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/sentiment> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/sentiment> ;
+    skos:notation "positive" ;
+    skos:prefLabel "positive"@en ;
+    skos:definition "Positive tone."@en .
+
+c:neutral a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/sentiment> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/sentiment> ;
+    skos:notation "neutral" ;
+    skos:prefLabel "neutral"@en ;
+    skos:definition "Neutral tone."@en .
+
+c:negative a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/sentiment> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/sentiment> ;
+    skos:notation "negative" ;
+    skos:prefLabel "negative"@en ;
+    skos:definition "Negative tone."@en .
+
+c:urgent a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/sentiment> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/sentiment> ;
+    skos:notation "urgent" ;
+    skos:prefLabel "urgent"@en ;
+    skos:definition "Urgent tone."@en .

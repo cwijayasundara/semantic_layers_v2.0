@@ -1,0 +1,33 @@
+# SKOS concept scheme: Severity. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/inc/severity/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/inc/scheme/severity> a skos:ConceptScheme ;
+    skos:prefLabel "Severity"@en ;
+    rdfs:comment "Incident severities, as used by incident.io." ;
+    skos:hasTopConcept c:SEV1, c:SEV2, c:SEV3 .
+
+c:SEV1 a skos:Concept ;
+    skos:inScheme <https://kg.local/inc/scheme/severity> ;
+    skos:topConceptOf <https://kg.local/inc/scheme/severity> ;
+    skos:notation "SEV1" ;
+    skos:prefLabel "SEV1"@en ;
+    skos:definition "Critical, widespread member impact."@en .
+
+c:SEV2 a skos:Concept ;
+    skos:inScheme <https://kg.local/inc/scheme/severity> ;
+    skos:topConceptOf <https://kg.local/inc/scheme/severity> ;
+    skos:notation "SEV2" ;
+    skos:prefLabel "SEV2"@en ;
+    skos:definition "Major impact on a key experience."@en .
+
+c:SEV3 a skos:Concept ;
+    skos:inScheme <https://kg.local/inc/scheme/severity> ;
+    skos:topConceptOf <https://kg.local/inc/scheme/severity> ;
+    skos:notation "SEV3" ;
+    skos:prefLabel "SEV3"@en ;
+    skos:definition "Minor or contained impact."@en .

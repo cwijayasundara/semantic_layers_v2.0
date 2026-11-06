@@ -1,0 +1,17 @@
+{
+  "question": "Which applications were named in hypotheses that were later retracted during the incident?",
+  "vars": [
+    "app"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/api-gateway>"
+    },
+    {
+      "app": "<https://kg.local/app/application/client-android>"
+    },
+    {
+      "app": "<https://kg.local/app/application/row-ranker>"
+    }
+  ]
+}

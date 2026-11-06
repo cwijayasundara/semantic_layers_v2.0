@@ -1,0 +1,13 @@
+{
+  "question": "How many past SEV2 incidents do api-gateway deployments explain, and what share of all SEV2s is that?",
+  "vars": [
+    "support",
+    "frequency"
+  ],
+  "rows": [
+    {
+      "support": "10",
+      "frequency": "0.4"
+    }
+  ]
+}

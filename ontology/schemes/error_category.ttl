@@ -1,0 +1,89 @@
+# SKOS concept scheme: Error category. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/log/error_category/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/log/scheme/error_category> a skos:ConceptScheme ;
+    skos:prefLabel "Error category"@en ;
+    rdfs:comment "Closed categories for log patterns and trace errors. Drain templates are classified into exactly one." ;
+    skos:hasTopConcept c:pool_exhaustion, c:timeout, c:partial_response, c:load_shed, c:server_error, c:null_pointer, c:tls_error, c:cache_miss, c:hot_partition, c:retry_exhausted, c:other .
+
+c:pool_exhaustion a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "pool_exhaustion" ;
+    skos:prefLabel "Connection pool exhausted"@en ;
+    skos:definition "A client connection pool has no idle connections (RESOURCE_EXHAUSTED, pool exhausted)."@en .
+
+c:timeout a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "timeout" ;
+    skos:prefLabel "Timeout"@en ;
+    skos:definition "A call exceeded its deadline or read timeout (DEADLINE_EXCEEDED, Connection Timeout)."@en .
+
+c:partial_response a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "partial_response" ;
+    skos:prefLabel "Partial response"@en ;
+    skos:definition "A federated or batched response returned with some fields or rows failed."@en .
+
+c:load_shed a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "load_shed" ;
+    skos:prefLabel "Load shed"@en ;
+    skos:definition "A gateway rejected requests to protect itself (503 shed)."@en .
+
+c:server_error a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "server_error" ;
+    skos:prefLabel "Server error"@en ;
+    skos:definition "A generic 5xx or unhandled server-side failure."@en .
+
+c:null_pointer a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "null_pointer" ;
+    skos:prefLabel "Null pointer"@en ;
+    skos:definition "A NullPointerException or equivalent null dereference."@en .
+
+c:tls_error a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "tls_error" ;
+    skos:prefLabel "TLS error"@en ;
+    skos:definition "Certificate or TLS handshake failure."@en .
+
+c:cache_miss a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "cache_miss" ;
+    skos:prefLabel "Cache miss storm"@en ;
+    skos:definition "Elevated cache misses or evictions forcing backend reads."@en .
+
+c:hot_partition a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "hot_partition" ;
+    skos:prefLabel "Hot partition"@en ;
+    skos:definition "A datastore partition overloaded by skewed keys."@en .
+
+c:retry_exhausted a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "retry_exhausted" ;
+    skos:prefLabel "Retries exhausted"@en ;
+    skos:definition "A client gave up after its retry budget (retry storm)."@en .
+
+c:other a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "other" ;
+    skos:prefLabel "Other"@en ;
+    skos:definition "An error that fits none of the other categories."@en .

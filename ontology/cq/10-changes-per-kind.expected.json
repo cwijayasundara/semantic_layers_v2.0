@@ -1,0 +1,29 @@
+{
+  "question": "How many changes of each kind happened inside the incident window?",
+  "vars": [
+    "kind",
+    "n"
+  ],
+  "rows": [
+    {
+      "kind": "client_release",
+      "n": "1"
+    },
+    {
+      "kind": "config_change",
+      "n": "4"
+    },
+    {
+      "kind": "deployment",
+      "n": "6"
+    },
+    {
+      "kind": "experiment_allocation",
+      "n": "1"
+    },
+    {
+      "kind": "scaling",
+      "n": "6"
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+# SHACL shapes encoding the graph invariants (Global Constraints, DESIGN.md
+# section 6). Validated with the TBox and SKOS schemes mixed into the data
+# graph (so sh:targetClass sees subclasses and scheme membership is checkable).
+# The rdf:type rule uses a SHACL-AF SPARQL target (pyshacl advanced=True).
+
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix ops:   <https://kg.local/ops#> .
+@prefix chat:  <https://kg.local/chat#> .
+@prefix inc:   <https://kg.local/inc#> .
+@prefix shp:   <https://kg.local/ops/shape/> .
+
+# 1. Every subject has rdf:type (IRIs only; blank nodes are list/structure cells).
+shp:Typed a sh:NodeShape ;
+    sh:target [
+        a sh:SPARQLTarget ;
+        sh:select """
+            SELECT ?this WHERE {
+                ?this ?p ?o .
+                FILTER(isIRI(?this))
+                FILTER NOT EXISTS { ?this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?t }
+            }"""
+    ] ;
+    sh:property [
+        sh:path rdf:type ;
+        sh:minCount 1 ;
+        sh:message "Node has no rdf:type" ;
+    ] .
+
+# 2. Every ops:Application is in the catalog.
+shp:Application a sh:NodeShape ;
+    sh:targetClass ops:Application ;
+    sh:property [
+        sh:path ops:inCatalog ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:hasValue true ;
+        sh:message "ops:Application without ops:inCatalog true" ;
+    ] .
+
+# Anything pointing at an application must point at a typed (hence catalog-gated) one.
+shp:ApplicationRef a sh:NodeShape ;
+    sh:targetObjectsOf ops:onApplication, ops:affects, ops:changedApp, ops:dependsOn,
+        ops:causeApp, inc:previouslyAffected ;
+    sh:class ops:Application ;
+    sh:message "Reference to a node that is not an ops:Application" .
+
+# 3. Every derived node carries provenance: a raw selector or prov:wasDerivedFrom.
+shp:Derived a sh:NodeShape ;
+    sh:targetClass ops:Signal, ops:Change, ops:Incident, ops:Page, ops:Message, ops:Claim,
+        ops:Hypothesis, ops:Pattern, ops:CausalChain, ops:Finding ;
+    sh:or (
+        [ sh:path ops:rawSelector ; sh:minCount 1 ]
+        [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ]
+    ) ;
+    sh:message "Derived node without ops:rawSelector or prov:wasDerivedFrom" .
+
+# 4. Closed taxonomies: values are concepts of the right scheme.
+shp:InMessageCategory a sh:NodeShape ;
+    sh:property [ sh:path skos:inScheme ; sh:hasValue <https://kg.local/chat/scheme/message_category> ] .
+
+shp:Category a sh:NodeShape ;
+    sh:targetSubjectsOf chat:category ;
+    sh:property [
+        sh:path chat:category ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:or ( shp:InMessageCategory [ sh:hasValue chat:Unclassified ] ) ;
+        sh:message "chat:category outside the message category scheme" ;
+    ] .
+
+# chat:Unclassified is allowed only on nodes whose status is unclassified.
+shp:UnclassifiedOnlyWhenUnclassified a sh:NodeShape ;
+    sh:targetSubjectsOf chat:category ;
+    sh:or (
+        [ sh:not [ sh:property [ sh:path chat:category ; sh:hasValue chat:Unclassified ] ] ]
+        [ sh:property [ sh:path chat:classificationStatus ; sh:hasValue "unclassified" ] ]
+    ) ;
+    sh:message "chat:Unclassified requires chat:classificationStatus \"unclassified\"" .
+
+shp:Sentiment a sh:NodeShape ;
+    sh:targetSubjectsOf chat:sentiment ;
+    sh:property [
+        sh:path chat:sentiment ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/chat/scheme/sentiment> ] ] ;
+        sh:message "chat:sentiment outside the sentiment scheme" ;
+    ] .
+
+shp:ClaimKind a sh:NodeShape ;
+    sh:targetSubjectsOf chat:claimKind ;
+    sh:property [
+        sh:path chat:claimKind ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/chat/scheme/claim_kind> ] ] ;
+        sh:message "chat:claimKind outside the claim kind scheme" ;
+    ] .
+
+shp:Severity a sh:NodeShape ;
+    sh:targetSubjectsOf ops:severity ;
+    sh:property [
+        sh:path ops:severity ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/inc/scheme/severity> ] ] ;
+        sh:message "ops:severity outside the severity scheme" ;
+    ] .
+
+shp:ChangeKind a sh:NodeShape ;
+    sh:targetSubjectsOf ops:changeKind, ops:causeKind ;
+    sh:property [
+        sh:path ops:changeKind ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/chg/scheme/change_kind> ] ] ;
+    ] ;
+    sh:property [
+        sh:path ops:causeKind ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/chg/scheme/change_kind> ] ] ;
+    ] .
+
+shp:SignalType a sh:NodeShape ;
+    sh:targetSubjectsOf ops:signalType ;
+    sh:property [
+        sh:path ops:signalType ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/ops/scheme/signal_type> ] ] ;
+    ] .
+
+shp:ErrorCategory a sh:NodeShape ;
+    sh:targetSubjectsOf ops:errorCategory ;
+    sh:property [
+        sh:path ops:errorCategory ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/log/scheme/error_category> ] ] ;
+    ] .
+
+shp:FaultKind a sh:NodeShape ;
+    sh:targetSubjectsOf ops:faultKind ;
+    sh:property [
+        sh:path ops:faultKind ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+        sh:node [ sh:property [ sh:path skos:inScheme ;
+                                sh:hasValue <https://kg.local/ops/scheme/fault_kind> ] ] ;
+    ] .
+
+shp:IncidentRelated a sh:NodeShape ;
+    sh:targetSubjectsOf chat:isIncidentRelated ;
+    sh:property [ sh:path chat:isIncidentRelated ; sh:maxCount 1 ; sh:datatype xsd:boolean ] .
+
+# 5. Dependency edges capped at 50 per node per direction.
+shp:DependsOnOut a sh:NodeShape ;
+    sh:targetSubjectsOf ops:dependsOn ;
+    sh:property [ sh:path ops:dependsOn ; sh:maxCount 50 ;
+                  sh:message "More than 50 outgoing ops:dependsOn edges" ] .
+
+shp:DependsOnIn a sh:NodeShape ;
+    sh:targetObjectsOf ops:dependsOn ;
+    sh:property [ sh:path [ sh:inversePath ops:dependsOn ] ; sh:maxCount 50 ;
+                  sh:message "More than 50 incoming ops:dependsOn edges" ] .
+
+# 6. Findings: on an application, citing evidence, with confidence in [0, 1].
+shp:Finding a sh:NodeShape ;
+    sh:targetClass ops:Finding ;
+    sh:property [ sh:path ops:onApplication ; sh:minCount 1 ; sh:class ops:Application ] ;
+    sh:property [ sh:path ops:cites ; sh:minCount 1 ] ;
+    sh:property [ sh:path ops:confidence ; sh:minCount 1 ; sh:maxCount 1 ] .
+
+shp:Confidence a sh:NodeShape ;
+    sh:targetSubjectsOf ops:confidence ;
+    sh:property [
+        sh:path ops:confidence ;
+        sh:or ( [ sh:datatype xsd:decimal ] [ sh:datatype xsd:double ] [ sh:datatype xsd:float ] ) ;
+        sh:minInclusive 0 ;
+        sh:maxInclusive 1 ;
+        sh:message "ops:confidence must be a number in [0, 1]" ;
+    ] .

@@ -1,0 +1,16 @@
+# Which experiment allocations changed inside the window on applications downstream of the live incident's affected service?
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?change ?app WHERE {
+  ?incident a ops:Incident ; ops:atTime ?t ; ops:affects ?incidentApp .
+  FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+  ?incidentApp ops:dependsOn+ ?app .
+  ?change a ops:ExperimentAllocation ; ops:changedApp ?app ; ops:atTime ?ct .
+  FILTER(?ct >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?ct < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+}

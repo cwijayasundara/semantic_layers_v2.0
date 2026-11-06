@@ -1,0 +1,304 @@
+# e2ekg core ontology (TBox). Hand-written, reviewed like code.
+#
+# Classes are exactly DESIGN.md section 5, plus five the task brief's own
+# properties and shapes need: ops:Change and ops:Signal (grouping supers),
+# ops:Finding (AutoRCA specialist output), ops:CausalLink (the node behind
+# ops:hasLink / ops:linkOrder) and chat:Thread. There is deliberately no
+# generic Service class: "service" means four different things across the
+# tooling, so the only software identity is ops:Application, gated by the catalog.
+#
+# ABox conventions (what enrichers emit and the competency questions rely on):
+#   * Instance URIs follow https://kg.local/{ns}/{kind}/{stable_id}
+#     (e2ekg.graph.uris). Vocabulary terms live in https://kg.local/{ns}#.
+#   * Every time is an xsd:dateTime in UTC (ops:atTime, ops:windowStart, ops:windowEnd).
+#   * Closed values are SKOS concept URIs from ontology/schemes/, never strings.
+#   * Every derived node carries ops:rawSelector (a raw record id) or
+#     prov:wasDerivedFrom (an upstream node).
+#   * An incident's current ops:affects is the latest affected service;
+#     superseded values move to inc:previouslyAffected (correction history).
+#   * A chat hypothesis is typed both ops:Claim and ops:Hypothesis; an
+#     ops:Hypothesis without ops:Claim is machine-made (RCA agent).
+
+@prefix ops:   <https://kg.local/ops#> .
+@prefix app:   <https://kg.local/app#> .
+@prefix team:  <https://kg.local/team#> .
+@prefix infra: <https://kg.local/infra#> .
+@prefix chg:   <https://kg.local/chg#> .
+@prefix exp:   <https://kg.local/exp#> .
+@prefix met:   <https://kg.local/met#> .
+@prefix log:   <https://kg.local/log#> .
+@prefix trc:   <https://kg.local/trc#> .
+@prefix alrt:  <https://kg.local/alrt#> .
+@prefix inc:   <https://kg.local/inc#> .
+@prefix chat:  <https://kg.local/chat#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix time:  <http://www.w3.org/2006/time#> .
+
+<https://kg.local/ontology/core> a owl:Ontology ;
+    rdfs:label "e2ekg core ontology" ;
+    rdfs:comment "Identity, change, signal, response and reasoning classes for the observability knowledge graph." ;
+    owl:versionInfo "0.1.0" .
+
+# ---------------------------------------------------------------- identity
+
+ops:Application a owl:Class ;
+    rdfs:label "Application" ;
+    rdfs:comment "A deployable unit of software that exists in the software catalog. The only software identity; there is no generic Service type. Aligns with the OpenTelemetry service.name resource attribute." ;
+    rdfs:seeAlso <https://opentelemetry.io/docs/specs/semconv/resource/#service> .
+
+ops:Team a owl:Class ;
+    rdfs:subClassOf prov:Agent ;
+    rdfs:label "Team" ;
+    rdfs:comment "An owning engineering team; its rdfs:label is the catalog owner name (for example \"Team Bedrock\")." .
+
+ops:Person a owl:Class ;
+    rdfs:subClassOf prov:Agent ;
+    rdfs:label "Person" ;
+    rdfs:comment "An engineer, identified by a stable chat or on-call handle (team:handle)." .
+
+ops:Region a owl:Class ;
+    rdfs:label "Region" ;
+    rdfs:comment "A cloud region such as us-east-1. Aligns with the OpenTelemetry cloud.region attribute." ;
+    rdfs:seeAlso <https://opentelemetry.io/docs/specs/semconv/resource/cloud/> .
+
+ops:Cluster a owl:Class ;
+    rdfs:label "Cluster" ;
+    rdfs:comment "A deployment group of one application (server group, ASG or k8s deployment)." .
+
+ops:Instance a owl:Class ;
+    rdfs:label "Instance" ;
+    rdfs:comment "A host, VM or pod running an application. Aligns with OpenTelemetry host.name / k8s.pod.name." .
+
+# ----------------------------------------------------------------- changes
+
+ops:Change a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "Change" ;
+    rdfs:comment "Grouping superclass of everything that changed an application at a point in time. Carries ops:changeKind, ops:changedApp and ops:atTime." .
+
+ops:Deployment a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Deployment" ;
+    rdfs:comment "A new server-side version rolled out (Spinnaker pipeline execution)." .
+
+ops:ConfigChange a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Config change" ;
+    rdfs:comment "A dynamic property (fast property) value change, with old and new values." .
+
+ops:ScalingEvent a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Scaling event" ;
+    rdfs:comment "An autoscaling group capacity change (scale in or scale out)." .
+
+ops:ExperimentAllocation a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Experiment allocation" ;
+    rdfs:comment "A change in the allocation of an A/B test cell." .
+
+ops:Commit a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Commit" ;
+    rdfs:comment "A source control commit to an application's repository." .
+
+ops:ClientRelease a owl:Class ; rdfs:subClassOf ops:Change ;
+    rdfs:label "Client release" ;
+    rdfs:comment "A device client version rolled out to members." .
+
+# ----------------------------------------------------------------- signals
+
+ops:Signal a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:label "Signal" ;
+    rdfs:comment "Grouping superclass of telemetry-derived fingerprints. Raw high-volume telemetry stays out of the graph; signals link back to it by ops:rawSelector or prov:wasDerivedFrom." .
+
+ops:MetricSeries a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Metric series" ;
+    rdfs:comment "One cleaned time series (metric name plus normalized tags) of one application." .
+
+ops:Anomaly a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Anomaly" ;
+    rdfs:comment "A detected change point or outlier on a metric series, with onset time and magnitude." .
+
+ops:LogPattern a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Log pattern" ;
+    rdfs:comment "A mined log template (Drain) of one application, classified into an error category." .
+
+ops:LogSpike a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Log spike" ;
+    rdfs:comment "A burst of one log pattern over its baseline inside a time window, with count and magnitude." .
+
+ops:TraceEdgeFingerprint a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Trace edge fingerprint" ;
+    rdfs:comment "Aggregated latency and error statistics of one caller to callee edge over a window, from repaired span trees." .
+
+ops:Alert a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Alert" ;
+    rdfs:comment "A threshold alert firing (Radar) on an application." .
+
+# ---------------------------------------------------------------- response
+
+ops:Incident a owl:Class ;
+    rdfs:label "Incident" ;
+    rdfs:comment "An incident record (incident.io) with severity, affected services and responders." .
+
+ops:Page a owl:Class ;
+    rdfs:label "Page" ;
+    rdfs:comment "An on-call page (PagerDuty) sent to a person for an application." .
+
+ops:Message a owl:Class ;
+    rdfs:label "Message" ;
+    rdfs:comment "One chat message, classified into the closed message category and sentiment schemes." .
+
+ops:Claim a owl:Class ;
+    rdfs:label "Claim" ;
+    rdfs:comment "A typed statement extracted from a message (observation, hypothesis, mitigation, root cause, retraction), with the entities it is about." .
+
+ops:Mitigation a owl:Class ; rdfs:subClassOf ops:Claim ;
+    rdfs:label "Mitigation" ;
+    rdfs:comment "A claim that proposes or reports an action to reduce impact (for example \"bump min to 40\")." .
+
+# --------------------------------------------------------------- reasoning
+
+ops:Hypothesis a owl:Class ;
+    rdfs:label "Hypothesis" ;
+    rdfs:comment "A proposed cause. Human hypotheses are also ops:Claim; machine ones are derived from findings. Every hypothesis carries its evidence." .
+
+ops:CausalChain a owl:Class ;
+    rdfs:label "Causal chain" ;
+    rdfs:comment "An ordered, confidence-scored chain of signals from a cause to a symptom, produced by the correlation engine." .
+
+ops:CausalLink a owl:Class ;
+    rdfs:label "Causal link" ;
+    rdfs:comment "One position (ops:linkOrder) in a causal chain: a signal type on an application at a time, citing its evidence." .
+
+ops:Pattern a owl:Class ;
+    rdfs:label "Pattern" ;
+    rdfs:comment "A learned regularity from incident history (for example api-gateway deployments behind 40% of SEV2s), used as a prior." .
+
+ops:Finding a owl:Class ;
+    rdfs:label "Finding" ;
+    rdfs:comment "An RCA specialist's conclusion about one application, citing at least one piece of evidence, with confidence in [0, 1]." .
+
+chat:Thread a owl:Class ;
+    rdfs:label "Thread" ;
+    rdfs:comment "A chat channel or thread (Slack), classified as a whole into the message category scheme." .
+
+# ------------------------------------------------------- object properties
+
+ops:ownedBy a owl:ObjectProperty ; rdfs:domain ops:Application ; rdfs:range ops:Team ;
+    rdfs:label "owned by" ; rdfs:comment "The team that owns the application in the catalog." .
+ops:deployedIn a owl:ObjectProperty ; rdfs:domain ops:Application ; rdfs:range ops:Region ;
+    rdfs:label "deployed in" ; rdfs:comment "A region the application runs in." .
+ops:dependsOn a owl:ObjectProperty ; rdfs:domain ops:Application ; rdfs:range ops:Application ;
+    rdfs:label "depends on" ; rdfs:comment "Caller to callee dependency, merged from the catalog and trace edges, capped at 50 per node per direction." .
+ops:partOf a owl:ObjectProperty ;
+    rdfs:label "part of" ; rdfs:comment "Instance to cluster, cluster to application." .
+ops:affects a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Application ;
+    rdfs:label "affects" ; rdfs:comment "The current affected service of an incident." .
+ops:severity a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "severity" ; rdfs:comment "A concept from the severity scheme." .
+ops:changedApp a owl:ObjectProperty ; rdfs:domain ops:Change ; rdfs:range ops:Application ;
+    rdfs:label "changed app" ; rdfs:comment "The application a change was applied to." .
+ops:changeKind a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "change kind" ; rdfs:comment "A concept from the change kind scheme." .
+ops:signalType a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "signal type" ; rdfs:comment "One of the 13 correlation signal types (signal type scheme)." .
+ops:errorCategory a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "error category" ; rdfs:comment "A concept from the error category scheme." .
+ops:faultKind a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "fault kind" ; rdfs:comment "A concept from the fault kind scheme." .
+ops:causeKind a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "cause kind" ; rdfs:comment "Change kind concept of a pattern's or past incident's cause." .
+ops:causeApp a owl:ObjectProperty ; rdfs:range ops:Application ;
+    rdfs:label "cause app" ; rdfs:comment "Application whose change caused a past incident." .
+ops:onApplication a owl:ObjectProperty ; rdfs:range ops:Application ;
+    rdfs:label "on application" ; rdfs:comment "The application a signal, page, link, pattern or finding is about." .
+ops:onSeries a owl:ObjectProperty ; rdfs:domain ops:Anomaly ; rdfs:range ops:MetricSeries ;
+    rdfs:label "on series" ; rdfs:comment "The metric series an anomaly was detected on." .
+ops:ofPattern a owl:ObjectProperty ; rdfs:domain ops:LogSpike ; rdfs:range ops:LogPattern ;
+    rdfs:label "of pattern" ; rdfs:comment "The log pattern that spiked." .
+ops:hasLink a owl:ObjectProperty ; rdfs:domain ops:CausalChain ; rdfs:range ops:CausalLink ;
+    rdfs:label "has link" ; rdfs:comment "A link of a causal chain." .
+ops:explains a owl:ObjectProperty ; rdfs:range ops:Incident ;
+    rdfs:label "explains" ; rdfs:comment "The incident a causal chain or hypothesis explains." .
+ops:cites a owl:ObjectProperty ;
+    rdfs:label "cites" ; rdfs:comment "Evidence node supporting a finding, link or hypothesis." .
+ops:resolvedBy a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Person ;
+    rdfs:label "resolved by" ; rdfs:comment "The engineer who resolved the incident." .
+ops:similarTo a owl:ObjectProperty, owl:SymmetricProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Incident ;
+    rdfs:label "similar to" ; rdfs:comment "Two incidents with the same cause shape (cause kind, cause app, failure mode). Enrichers emit both directions." .
+ops:assignedTo a owl:ObjectProperty ; rdfs:domain ops:Page ; rdfs:range ops:Person ;
+    rdfs:label "assigned to" ; rdfs:comment "The person a page went to." .
+ops:forAlert a owl:ObjectProperty ; rdfs:domain ops:Page ; rdfs:range ops:Alert ;
+    rdfs:label "for alert" ; rdfs:comment "The alert that triggered a page." .
+ops:memberOf a owl:ObjectProperty ; rdfs:domain ops:Person ; rdfs:range ops:Team ;
+    rdfs:label "member of" ; rdfs:comment "Team membership of a person." .
+inc:previouslyAffected a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Application ;
+    rdfs:label "previously affected" ; rdfs:comment "A superseded affected service of an incident (its correction history)." .
+chat:category a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "category" ; rdfs:comment "Message or thread category: a concept of the message category scheme, or chat:Unclassified when classification failed." .
+chat:sentiment a owl:ObjectProperty ; rdfs:range skos:Concept ;
+    rdfs:label "sentiment" ; rdfs:comment "A concept of the sentiment scheme." .
+chat:claimKind a owl:ObjectProperty ; rdfs:domain ops:Claim ; rdfs:range skos:Concept ;
+    rdfs:label "claim kind" ; rdfs:comment "A concept of the claim kind scheme." .
+chat:about a owl:ObjectProperty ;
+    rdfs:label "about" ; rdfs:comment "An application or change a claim or message mentions, after identity resolution." .
+chat:retracts a owl:ObjectProperty ; rdfs:range ops:Claim ;
+    rdfs:label "retracts" ; rdfs:comment "A retraction claim walks back an earlier claim." .
+chat:inThread a owl:ObjectProperty ; rdfs:domain ops:Message ; rdfs:range chat:Thread ;
+    rdfs:label "in thread" ; rdfs:comment "The channel or thread a message belongs to." .
+chat:postedBy a owl:ObjectProperty ; rdfs:range ops:Person ;
+    rdfs:label "posted by" ; rdfs:comment "The author of a message or claim." .
+chat:forIncident a owl:ObjectProperty ; rdfs:domain chat:Thread ; rdfs:range ops:Incident ;
+    rdfs:label "for incident" ; rdfs:comment "The incident a channel was opened for." .
+
+# ----------------------------------------------------- datatype properties
+
+ops:inCatalog a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xsd:boolean ;
+    rdfs:label "in catalog" ; rdfs:comment "True when the application id matches the software catalog. SHACL requires it." .
+ops:appKind a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xsd:string ;
+    rdfs:label "app kind" ; rdfs:comment "Catalog kind: client, edge, service, datastore or cache." .
+ops:tier a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xsd:integer ;
+    rdfs:label "tier" ; rdfs:comment "Catalog criticality tier (0 is most critical)." .
+ops:atTime a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
+    rdfs:label "at time" ; rdfs:comment "UTC instant of a change, signal onset, message or incident opening. Equivalent in intent to time:inXSDDateTimeStamp." ;
+    rdfs:seeAlso time:inXSDDateTimeStamp .
+ops:windowStart a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
+    rdfs:label "window start" ; rdfs:comment "UTC start of the interval a fingerprint aggregates." ; rdfs:seeAlso time:hasBeginning .
+ops:windowEnd a owl:DatatypeProperty ; rdfs:range xsd:dateTime ;
+    rdfs:label "window end" ; rdfs:comment "UTC end (exclusive) of the interval a fingerprint aggregates." ; rdfs:seeAlso time:hasEnd .
+ops:rawSelector a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:label "raw selector" ; rdfs:comment "A raw record id (source|rel_path|offset|length|sha) or selector into the raw store." .
+ops:count a owl:DatatypeProperty ; rdfs:range xsd:integer ;
+    rdfs:label "count" ; rdfs:comment "Number of raw records a fingerprint summarizes." .
+ops:magnitude a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:label "magnitude" ; rdfs:comment "Size of a deviation relative to baseline." .
+ops:confidence a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:label "confidence" ; rdfs:comment "Confidence in [0, 1]." .
+ops:linkOrder a owl:DatatypeProperty ; rdfs:domain ops:CausalLink ; rdfs:range xsd:integer ;
+    rdfs:label "link order" ; rdfs:comment "Zero-based position of a link in its chain, cause first." .
+ops:support a owl:DatatypeProperty ; rdfs:domain ops:Pattern ; rdfs:range xsd:integer ;
+    rdfs:label "support" ; rdfs:comment "Number of past incidents matching a pattern." .
+ops:frequency a owl:DatatypeProperty ; rdfs:domain ops:Pattern ; rdfs:range xsd:decimal ;
+    rdfs:label "frequency" ; rdfs:comment "Share of incidents of the pattern's severity that match it." .
+ops:droppedEdges a owl:DatatypeProperty ; rdfs:domain ops:Application ; rdfs:range xsd:integer ;
+    rdfs:label "dropped edges" ; rdfs:comment "Dependency edges dropped by the 50 per direction cap." .
+team:handle a owl:DatatypeProperty ; rdfs:domain ops:Person ; rdfs:range xsd:string ;
+    rdfs:label "handle" ; rdfs:comment "Stable chat / on-call handle such as priya.nair." .
+chg:changeId a owl:DatatypeProperty ; rdfs:domain ops:Change ; rdfs:range xsd:string ;
+    rdfs:label "change id" ; rdfs:comment "Source-system change id (scenario scoped), for example chg-cfg-0001." .
+inc:incidentId a owl:DatatypeProperty ; rdfs:domain ops:Incident ; rdfs:range xsd:string ;
+    rdfs:label "incident id" ; rdfs:comment "Source-system incident id, for example INC-5377." .
+inc:correctedAt a owl:DatatypeProperty ; rdfs:domain ops:Incident ; rdfs:range xsd:dateTime ;
+    rdfs:label "corrected at" ; rdfs:comment "UTC time of the latest affected-service correction." .
+met:metricName a owl:DatatypeProperty ; rdfs:domain ops:MetricSeries ; rdfs:range xsd:string ;
+    rdfs:label "metric name" ; rdfs:comment "Normalized metric name, for example client.ttr.p90." .
+log:template a owl:DatatypeProperty ; rdfs:domain ops:LogPattern ; rdfs:range xsd:string ;
+    rdfs:label "template" ; rdfs:comment "Drain template text of a log pattern." .
+chat:isIncidentRelated a owl:DatatypeProperty ; rdfs:range xsd:boolean ;
+    rdfs:label "is incident related" ; rdfs:comment "Verbatim from the post (slack:isIncidentRelated): whether a message concerns an incident." .
+chat:classificationStatus a owl:DatatypeProperty ; rdfs:range xsd:string ;
+    rdfs:label "classification status" ; rdfs:comment "\"classified\" or \"unclassified\". Only unclassified messages may carry chat:Unclassified." .
+chat:quote a owl:DatatypeProperty ; rdfs:domain ops:Claim ; rdfs:range xsd:string ;
+    rdfs:label "quote" ; rdfs:comment "The exact text span of the message a claim was extracted from." .

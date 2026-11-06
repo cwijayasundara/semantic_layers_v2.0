@@ -1,0 +1,15 @@
+# What changed in the downstream dependency closure of homepage-graphql in the 40 minutes before the 15:20 PT TTR regression?
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?change ?kind ?app WHERE {
+  apps:homepage-graphql ops:dependsOn+ ?app .
+  ?change a/rdfs:subClassOf* ops:Change ; ops:changedApp ?app ; ops:atTime ?t ;
+          ops:changeKind/skos:notation ?kind .
+  FILTER(?t >= "2026-10-14T21:40:00Z"^^xsd:dateTime && ?t < "2026-10-14T22:20:00Z"^^xsd:dateTime)
+}

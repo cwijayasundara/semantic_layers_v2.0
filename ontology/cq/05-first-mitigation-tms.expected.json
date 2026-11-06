@@ -1,0 +1,15 @@
+{
+  "question": "What kind of claim is the first mitigation about title-metadata-svc during the incident, and did it come before anyone named a root cause?",
+  "vars": [
+    "kind",
+    "app",
+    "beforeRootCause"
+  ],
+  "rows": [
+    {
+      "kind": "mitigation",
+      "app": "<https://kg.local/app/application/title-metadata-svc>",
+      "beforeRootCause": "true"
+    }
+  ]
+}

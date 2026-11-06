@@ -1,0 +1,47 @@
+# SKOS concept scheme: Claim kind. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/chat/claim_kind/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/chat/scheme/claim_kind> a skos:ConceptScheme ;
+    skos:prefLabel "Claim kind"@en ;
+    rdfs:comment "Kinds of typed claims extracted from chat messages." ;
+    skos:hasTopConcept c:observation, c:hypothesis, c:mitigation, c:root_cause, c:retraction .
+
+c:observation a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/claim_kind> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/claim_kind> ;
+    skos:notation "observation" ;
+    skos:prefLabel "observation"@en ;
+    skos:definition "A reported fact about the system (a graph, a log line, a metric)."@en .
+
+c:hypothesis a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/claim_kind> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/claim_kind> ;
+    skos:notation "hypothesis" ;
+    skos:prefLabel "hypothesis"@en ;
+    skos:definition "A proposed cause."@en .
+
+c:mitigation a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/claim_kind> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/claim_kind> ;
+    skos:notation "mitigation" ;
+    skos:prefLabel "mitigation"@en ;
+    skos:definition "A proposed or applied action to reduce impact."@en .
+
+c:root_cause a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/claim_kind> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/claim_kind> ;
+    skos:notation "root_cause" ;
+    skos:prefLabel "root cause"@en ;
+    skos:definition "A statement naming the cause."@en .
+
+c:retraction a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/claim_kind> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/claim_kind> ;
+    skos:notation "retraction" ;
+    skos:prefLabel "retraction"@en ;
+    skos:definition "A walk-back of an earlier claim."@en .

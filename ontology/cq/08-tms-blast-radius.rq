@@ -1,0 +1,12 @@
+# Which applications transitively depend on title-metadata-svc (its blast radius)?
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?app WHERE {
+  ?app ops:dependsOn+ apps:title-metadata-svc .
+}

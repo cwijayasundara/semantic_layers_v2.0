@@ -1,0 +1,50 @@
+{
+  "question": "What changed in the downstream dependency closure of homepage-graphql in the 40 minutes before the 15:20 PT TTR regression?",
+  "vars": [
+    "change",
+    "kind",
+    "app"
+  ],
+  "rows": [
+    {
+      "change": "<https://kg.local/chg/experiment_allocation/hero/chg-exp-0001>",
+      "kind": "experiment_allocation",
+      "app": "<https://kg.local/app/application/row-ranker>"
+    },
+    {
+      "change": "<https://kg.local/chg/config_change/hero/chg-cfg-0001>",
+      "kind": "config_change",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0001>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0002>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0003>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0004>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0005>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/chg-asg-0006>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    }
+  ]
+}

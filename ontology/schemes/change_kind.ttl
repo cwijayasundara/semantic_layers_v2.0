@@ -1,0 +1,60 @@
+# SKOS concept scheme: Change kind. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/chg/change_kind/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/chg/scheme/change_kind> a skos:ConceptScheme ;
+    skos:prefLabel "Change kind"@en ;
+    rdfs:comment "Kinds of change events. Each maps to its correlation signal type with ops:signalType." ;
+    skos:hasTopConcept c:deployment, c:config_change, c:scaling, c:experiment_allocation, c:commit, c:client_release .
+
+c:deployment a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "deployment" ;
+    skos:prefLabel "Deployment"@en ;
+    skos:definition "A server-side version rollout."@en ;
+    ops:signalType sigt:deployment .
+
+c:config_change a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "config_change" ;
+    skos:prefLabel "Config change"@en ;
+    skos:definition "A dynamic property change."@en ;
+    ops:signalType sigt:config_change .
+
+c:scaling a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "scaling" ;
+    skos:prefLabel "Scaling"@en ;
+    skos:definition "An autoscaling capacity change."@en ;
+    ops:signalType sigt:autoscaling .
+
+c:experiment_allocation a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "experiment_allocation" ;
+    skos:prefLabel "Experiment allocation"@en ;
+    skos:definition "An A/B allocation change."@en ;
+    ops:signalType sigt:experiment .
+
+c:commit a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "commit" ;
+    skos:prefLabel "Commit"@en ;
+    skos:definition "A source control commit."@en ;
+    ops:signalType sigt:commit .
+
+c:client_release a skos:Concept ;
+    skos:inScheme <https://kg.local/chg/scheme/change_kind> ;
+    skos:topConceptOf <https://kg.local/chg/scheme/change_kind> ;
+    skos:notation "client_release" ;
+    skos:prefLabel "Client release"@en ;
+    skos:definition "A device client release."@en ;
+    ops:signalType sigt:deployment .
