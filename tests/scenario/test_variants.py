@@ -70,3 +70,21 @@ def test_same_world_and_deterministic():
     h = hero_scenario()
     assert all(s.catalog == h.catalog and s.edges == h.edges for s in V().values())
     assert [s.model_dump_json() for s in variant_scenarios(7)] == [s.model_dump_json() for s in variant_scenarios(7)]
+
+
+import pytest  # noqa: E402
+
+from e2ekg.scenario.hero import hero_scenario as _hero  # noqa: E402
+from e2ekg.scenario.topology import upstream_closure  # noqa: E402
+
+_ALL = (_hero(),) + variant_scenarios()
+
+
+@pytest.mark.parametrize("s", _ALL, ids=lambda s: s.name)
+def test_chain_gaps_and_topology(s):
+    ch = s.answer_key.causal_chain
+    for a, b in zip(ch, ch[1:]):
+        gap = (b.at_utc - a.at_utc).total_seconds()
+        assert 0 <= gap <= 600, (s.name, a, b)
+        assert (a.app == b.app or b.signal in ("alert", "incident")
+                or b.app in upstream_closure(s.edges, a.app)), (s.name, a, b)

@@ -49,17 +49,17 @@ _SPECS = (
         ("chg-exp-0001", "experiment_allocation", "row-ranker", 8, {"experiment": "row-ranker-cell-d", "old_allocation_pct": "5", "new_allocation_pct": "15"}, False),
     ), ("chg-cfg-0001",), ("chg-dep-0001", "chg-exp-0001"), "chg-cfg-0001", ("title-metadata-svc", "row-ranker")),
     _Spec("v-hot-partition", 10, (9, 17), "db_hot_partition", "cassandra-titles", (
-        ("chg-cmt-0001", "commit", "title-metadata-svc", 0, {"sha": "9f3c2ab", "message": "key title lookups by region only (drops titleId from partition key)"}, True),
+        ("chg-cfg-0001", "config_change", "cassandra-titles", 0, {"property": "cassandra-titles.titles.partition_key", "old": "titleId", "new": "region"}, True),
         ("chg-dep-0001", "deployment", "search-svc", 4, {"version": "search-svc-v3.40.0", "strategy": "red-black"}, False),
         ("chg-rel-0001", "client_release", "client-web", 7, {"version": "web-2026.41", "channel": "production", "rollout_pct": "100"}, False),
-    ), ("chg-cmt-0001",), ("chg-dep-0001", "chg-rel-0001"), "chg-cmt-0001", ("search-svc", "client-web")),
+    ), ("chg-cfg-0001",), ("chg-dep-0001", "chg-rel-0001"), "chg-cfg-0001", ("search-svc", "client-web")),
     _Spec("v-cert-expiry", 11, (16, 5), "cert_expiry", "entitlement-svc", (
         ("chg-cfg-0001", "config_change", "entitlement-svc", 0, {"property": "entitlement-svc.tls.cert.serial", "old": "0xA41C", "new": "0xB77E", "note": "cert rotation"}, True),
         ("chg-dep-0001", "deployment", "api-gateway", 5, {"version": "api-gateway-v7.32.0", "strategy": "red-black"}, False),
         ("chg-exp-0001", "experiment_allocation", "ab-allocator", 9, {"experiment": "paywall-cell-b", "old_allocation_pct": "0", "new_allocation_pct": "5"}, False),
     ), ("chg-cfg-0001",), ("chg-dep-0001", "chg-exp-0001"), "chg-cfg-0001", ("api-gateway", "ab-allocator")),
     _Spec("v-retry-storm", 12, (11, 8), "retry_storm", "row-ranker", (
-        ("chg-cmt-0001", "commit", "row-ranker", -35, {"sha": "c0ffee1", "message": "add retries (max 5, no backoff) to title-batch-loader calls"}, False),
+        ("chg-cmt-0001", "commit", "row-ranker", -8, {"sha": "c0ffee1", "message": "add retries (max 5, no backoff) to title-batch-loader calls"}, False),
         ("chg-dep-0001", "deployment", "row-ranker", 0, {"version": "row-ranker-v12.7.0", "strategy": "red-black"}, True),
         ("chg-cfg-0001", "config_change", "profile-svc", 4, {"property": "profile-svc.cache.size", "old": "5000", "new": "8000"}, False),
         ("chg-rel-0001", "client_release", "client-android", 8, {"version": "8.113.0", "channel": "production", "rollout_pct": "100"}, False),
