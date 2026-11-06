@@ -323,6 +323,30 @@ def test_a_causal_path_observation_is_never_retracted(harvested_hero):
                  "FILTER(CONTAINS(?q, 'p99') || CONTAINS(?q, 'instance')) }")
 
 
+def test_threads_and_walk_back_links_cite_their_slack_records(harvested_hero):
+    st = harvested_hero.store
+    assert not q(st, "SELECT ?t WHERE { ?t a chat:Thread FILTER NOT EXISTS { ?t ops:rawSelector ?s } }")
+    rows = q(st, "SELECT DISTINCT ?t ?sel WHERE { ?t a chat:Thread ; ops:rawSelector ?sel }")
+    msg_raw = {r["m"]: r["raw"] for r in q(st, "SELECT DISTINCT ?m ?raw WHERE { ?m a ops:Message ; "
+                                                "ops:rawSelector ?raw }")}
+    in_thread = defaultdict(set)
+    for r in q(st, "SELECT DISTINCT ?m ?t WHERE { ?m a ops:Message ; chat:inThread ?t }"):
+        in_thread[r["t"]].add(msg_raw[r["m"]])
+    got = defaultdict(set)
+    for r in rows:
+        got[r["t"]].add(r["sel"])
+    assert got == in_thread
+    edges = q(st, "SELECT DISTINCT ?r ?c WHERE { ?r chat:retracts ?c }")
+    assert edges
+    for e in edges:
+        derived = {x["raw"] for x in q(st, f"SELECT ?raw WHERE {{ <{e['r']}> prov:wasDerivedFrom/"
+                                           f"ops:rawSelector ?raw }}")} | {
+            x["raw"] for x in q(st, f"SELECT ?raw WHERE {{ <{e['c']}> prov:wasDerivedFrom/"
+                                    f"ops:rawSelector ?raw }}")}
+        cited = {x["raw"] for x in q(st, f"SELECT ?raw WHERE {{ <{e['r']}> ops:rawSelector ?raw }}")}
+        assert derived and derived <= cited
+
+
 def test_history_patterns_and_similarity(harvested_hero):
     st = harvested_hero.store
     rows = q(st, "SELECT ?s ?f WHERE { ?p a ops:Pattern ; ops:onApplication "

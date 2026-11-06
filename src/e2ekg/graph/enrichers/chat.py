@@ -1,7 +1,7 @@
 """Chat enricher: Slack channels, messages and the claims extracted from them (Task 9).
 
-  * chat:Thread per channel, chat:forIncident the incident.io record whose
-    slack_channel names it.
+  * chat:Thread per channel (ops:rawSelector: every Slack record of the channel),
+    chat:forIncident the incident.io record whose slack_channel names it.
   * ops:Message per Slack record (edits included, prov:wasRevisionOf the
     original): chat:inThread, ops:atTime (Slack ts with its microseconds),
     chat:postedBy (handle from the user profile; a record without one borrows
@@ -14,7 +14,9 @@
     message.
   * chat:retracts (core.ttl): only the hypothesis the extractor linked (R33). "I don't
     think it's X" withdraws a suspicion; it does not make an observation about X false,
-    so a walk-back with no compatible hypothesis retracts nothing."""
+    so a walk-back with no compatible hypothesis retracts nothing. The retraction claim
+    cites both Slack records the link rests on (its own message and the target's) with
+    ops:rawSelector."""
 from rdflib import Literal, URIRef
 from rdflib.namespace import PROV, RDF
 
@@ -97,10 +99,14 @@ class ChatEnricher(Enricher):
 
     def emit(self, r):
         sc = self.scenario
-        channels = sorted({m["channel"] for m in r["msgs"] if m["channel"]})
-        for ch in channels:
+        in_channel: dict[str, list[str]] = {}
+        for m in r["msgs"]:
+            if m["channel"]:
+                in_channel.setdefault(m["channel"], []).append(m["raw_id"])
+        for ch in sorted(in_channel):
             t = scoped_uri("chat", "thread", sc, ch)
             yield t, RDF.type, CHAT.Thread
+            yield from raw_selectors(t, in_channel[ch])
             if ch in r["incident_of"]:
                 yield t, CHAT.forIncident, scoped_uri("inc", "incident", sc, r["incident_of"][ch])
         for m in r["msgs"]:
@@ -125,6 +131,7 @@ class ChatEnricher(Enricher):
             yield u, PROV.wasDerivedFrom, node("chat", "message", sc, c["raw_id"])
             for t in r["retracts"].get(c["claim_idx"], ()):
                 yield u, CHAT.retracts, _claim(sc, t)
+                yield from raw_selectors(u, [c["raw_id"], t["raw_id"]])
 
 
 def _claim(scenario: str, c: dict):
