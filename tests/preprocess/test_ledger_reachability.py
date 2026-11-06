@@ -13,8 +13,10 @@ from e2ekg.preprocess.tables import TABLES
 
 
 def run_cli(*args):
-    return subprocess.run([sys.executable, "-m", "e2ekg.cli", *args], capture_output=True,
-                          text=True)
+    # never fall back to the repo's data/raw: point --raw at nothing unless the test says so
+    extra = [] if "--raw" in args else ["--raw", "/nonexistent-raw-root"]
+    return subprocess.run([sys.executable, "-m", "e2ekg.cli", *args, *extra],
+                          capture_output=True, text=True)
 
 
 @pytest.fixture
@@ -90,3 +92,18 @@ def test_derived_passes_keep_file_row_order(preprocessed_hero):
         bad = off.filter((pl.col("rel_path") == pl.col("rel_path").shift(1))
                          & (pl.col("o") < pl.col("o").shift(1)))
         assert bad.height == 0, t
+
+
+def test_ledger_warns_then_fails_when_chat_outputs_are_missing(proc_copy):
+    (proc_copy / "derived" / "chat_messages.parquet").unlink()
+    p = run_cli("ledger", "--proc", str(proc_copy))
+    assert p.returncode == 0 and "WARN chat outputs missing" in p.stdout
+    p = run_cli("ledger", "--proc", str(proc_copy), "--require-chat")
+    assert p.returncode != 0 and "FAIL" in p.stdout
+
+
+def test_ledger_fails_when_chat_rows_are_short(proc_copy):
+    f = proc_copy / "derived" / "chat_messages.parquet"
+    pl.read_parquet(f).slice(1).write_parquet(f)
+    p = run_cli("ledger", "--proc", str(proc_copy))
+    assert p.returncode != 0 and "chat_messages has" in p.stdout

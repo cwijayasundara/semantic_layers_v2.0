@@ -135,6 +135,19 @@ def _cmd_ledger(args: argparse.Namespace) -> int:
             have = pl.scan_parquet(proc / f"{t}.parquet").select(pl.len()).collect().item()
             if have != n:
                 problems.append(f"table {t}: {have} rows, ledger.json says {n}")
+        chat = proc / "derived" / "chat_messages.parquet"
+        if not chat.exists():
+            msg = "chat outputs missing (run preprocess with --llm scripted|fireworks)"
+            if args.require_chat:
+                problems.append(msg)
+            else:
+                print(f"{name}: WARN {msg}")
+        else:
+            n_slack = pl.scan_parquet(proc / "slack.parquet").select(pl.len()).collect().item()
+            n_chat = pl.scan_parquet(chat).select(pl.len()).collect().item()
+            print(f"{name}: chat messages {n_chat}/{n_slack}")
+            if n_chat != n_slack:
+                problems.append(f"chat_messages has {n_chat} rows for {n_slack} slack rows")
         print(f"{name}: {'FAIL ' + '; '.join(problems) if problems else 'OK'}", flush=True)
         bad += bool(problems)
     return 1 if bad else 0
@@ -146,6 +159,8 @@ def _add_ledger(sub) -> None:
     p.add_argument("--out", default="data/processed", help="processed root")
     p.add_argument("--raw", default="data/raw", help="raw root (coverage is skipped if absent)")
     p.add_argument("--proc", default=None, help="one processed scenario directory")
+    p.add_argument("--require-chat", action="store_true",
+                   help="fail (not just warn) when chat extraction outputs are missing")
     p.set_defaults(func=_cmd_ledger)
 
 
