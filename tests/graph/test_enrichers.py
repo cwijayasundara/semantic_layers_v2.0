@@ -336,6 +336,24 @@ def test_alerts_pages_incidents(harvested_hero):
     assert pages
 
 
+def test_every_incident_record_is_a_version_with_its_own_time(harvested_hero):
+    st = harvested_hero.store
+    rows = q(st, "SELECT ?t ?a ?s WHERE { ?i inc:incidentId 'INC-5377' . ?v a inc:IncidentVersion ;"
+                 " inc:versionOf ?i ; ops:atTime ?t ; inc:affectedService ?a ; ops:rawSelector ?r ;"
+                 " ops:severity/skos:notation ?s }")
+    assert sorted((r["t"], _app(r["a"]), r["s"]) for r in rows) == [
+        ("2026-10-14T22:34:00Z", "api-gateway", "SEV2"),
+        ("2026-10-14T23:14:00Z", "homepage-graphql", "SEV2")]
+    as_of = q(st, "SELECT ?a WHERE { ?i inc:incidentId 'INC-5377' . ?v inc:versionOf ?i ; "
+                  "ops:atTime ?t ; inc:affectedService ?a "
+                  "FILTER(?t <= '2026-10-14T23:00:00Z'^^<http://www.w3.org/2001/XMLSchema#dateTime>)"
+                  " } ORDER BY DESC(?t) LIMIT 1")
+    assert as_of == [{"a": str(app_uri("api-gateway"))}]
+    n = q(st, "SELECT (COUNT(DISTINCT ?v) AS ?n) WHERE { ?v a inc:IncidentVersion }")
+    assert int(n[0]["n"]) == pl.scan_parquet(harvested_hero.proc / "incidents.parquet").select(
+        pl.len()).collect().item()
+
+
 def test_chat_messages_claims_and_unclassified(harvested_hero):
     st = harvested_hero.store
     # DISTINCT: Oxigraph's union default graph is a bag, and Person nodes sit in several graphs

@@ -8,7 +8,12 @@
     incident.created record, ops:severity, ops:affects = the latest record's
     affected services, inc:previouslyAffected = earlier ones it dropped (with
     inc:correctedAt, the first record carrying the current list), and from the
-    resolution: ops:resolvedBy, ops:causeKind and ops:causeApp (postmortem).
+    resolution: ops:resolvedBy, ops:causeKind and ops:causeApp (postmortem);
+  * one inc:IncidentVersion per incident.io record: inc:versionOf the incident,
+    ops:atTime the record's time, and what that record itself states,
+    ops:severity and inc:affectedService. The incident as known at time t is its
+    latest version at or before t (R34), so a correction never erases what was
+    known before it.
 Every record of a node is cited (ops:rawSelector), duplicate webhooks included.
 A severity the record lost to the evt.missing_field mess is read back from its
 description; otherwise the incident's other records supply it. Service names
@@ -18,7 +23,7 @@ import re
 from rdflib.namespace import RDF
 
 from e2ekg.graph.enricher import (
-    NS, Enricher, json_fields, person, raw_selectors, read_table, recovered, string, ts,
+    NS, Enricher, json_fields, node, person, raw_selectors, read_table, recovered, string, ts,
 )
 from e2ekg.graph.uris import CHANGE_KINDS, app_uri, concept, scoped_uri
 from e2ekg.preprocess.identity import APP_URI_PREFIX
@@ -119,15 +124,35 @@ class AlertsIncidentsEnricher(Enricher):
             if i["cause_app"]:
                 yield u, OPS.causeApp, app_uri(i["cause_app"])
             yield from raw_selectors(u, i["raw_ids"])
+            for v in i["versions"]:
+                vu = node("inc", "version", sc, v["raw_id"])
+                yield vu, RDF.type, INC.IncidentVersion
+                yield vu, INC.versionOf, u
+                if v["at"] is not None:
+                    yield vu, OPS.atTime, ts(v["at"])
+                if v["severity"]:
+                    yield vu, OPS.severity, concept("severity", v["severity"])
+                for x in v["affected"]:
+                    yield vu, INC.affectedService, app_uri(x)
+                yield from raw_selectors(vu, [v["raw_id"]])
+
+
+def _affected(f: dict, apps: dict[str, str | None]) -> list[str]:
+    return list(dict.fromkeys(a for x in f.get("affected_services") or ()
+                              if isinstance(x, str) and (a := apps.get(x))))
 
 
 def _incident(rows: list[dict], apps: dict[str, str | None]) -> dict:
     fields = [json_fields(r["fields"]) for r in rows]
-    sev = next((s for r, f in zip(rows, fields, strict=True)
-                if (s := severity(r["severity"]) or severity(recovered(f, "severity")))), None)
-    lists = [(r, [a for x in f["affected_services"] if isinstance(x, str) and (a := apps.get(x))])
-             for r, f in zip(rows, fields, strict=True) if f.get("affected_services")]
-    current = list(dict.fromkeys(lists[-1][1])) if lists else []
+    sevs = [severity(r["severity"]) or severity(recovered(f, "severity"))
+            for r, f in zip(rows, fields, strict=True)]
+    sev = next((s for s in sevs if s), None)
+    versions = [{"raw_id": r["raw_id"], "at": r["ts_utc"], "severity": s,
+                 "affected": _affected(f, apps)}
+                for r, f, s in zip(rows, fields, sevs, strict=True)]
+    lists = [(r, v["affected"]) for r, f, v in zip(rows, fields, versions, strict=True)
+             if f.get("affected_services")]
+    current = lists[-1][1] if lists else []
     previous = list(dict.fromkeys(a for _, xs in lists for a in xs if a not in current))
     corrected = next((r["ts_utc"] for r, xs in lists if set(xs) == set(current)), None) \
         if previous else None
@@ -136,7 +161,7 @@ def _incident(rows: list[dict], apps: dict[str, str | None]) -> dict:
     pm = resolved.get("postmortem") if isinstance(resolved.get("postmortem"), dict) else {}
     kind = pm.get("contributing_change_kind")
     cause = pm.get("contributing_service")
-    return {"severity": sev, "current": current, "previous": previous,
+    return {"severity": sev, "versions": versions, "current": current, "previous": previous,
             "corrected": corrected, "resolved_by": resolved.get("resolved_by"),
             "cause_kind": kind if kind in CHANGE_KINDS else None,
             "cause_app": apps.get(cause) if cause else None}

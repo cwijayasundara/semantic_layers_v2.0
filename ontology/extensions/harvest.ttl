@@ -10,6 +10,7 @@
 @prefix log:   <https://kg.local/log#> .
 @prefix chg:   <https://kg.local/chg#> .
 @prefix exp:   <https://kg.local/exp#> .
+@prefix inc:   <https://kg.local/inc#> .
 @prefix owl:   <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
@@ -58,6 +59,19 @@ log:refines a owl:ObjectProperty ; rdfs:domain ops:LogPattern ; rdfs:range ops:L
     rdfs:comment "A status-refined access-log pattern's parent template. The refined pattern's ops:rawSelector is the parent's (a superset: selectors key on the template, not the status); its ops:count is the refined row count." .
 log:httpStatus a owl:DatatypeProperty ; rdfs:domain ops:LogPattern ; rdfs:range xsd:integer ;
     rdfs:label "HTTP status" ; rdfs:comment "The HTTP status of a status-refined access-log pattern." .
+
+# Why: ops:affects and ops:severity hold an incident's LATEST values and
+# inc:previouslyAffected the superseded ones, untimed, so "what was the affected
+# service at 23:00?" had no answer. A version per incident.io record keeps each
+# statement with its own time; the incident as known at t is its latest version
+# at or before t (R34). ops:atTime, ops:severity and ops:rawSelector apply as usual.
+inc:IncidentVersion a owl:Class ;
+    rdfs:label "Incident version" ;
+    rdfs:comment "One incident.io record of an incident (created, updated, resolved): ops:atTime the record's time, ops:severity and inc:affectedService as that record states them, ops:rawSelector the record." .
+inc:versionOf a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:range ops:Incident ;
+    rdfs:label "version of" ; rdfs:comment "The incident a version describes." .
+inc:affectedService a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:range ops:Application ;
+    rdfs:label "affected service" ; rdfs:comment "An affected service the version's record lists." .
 
 # Why: core.ttl says a config change carries "old and new values" and an
 # allocation change is "of an A/B test cell", but defines no properties for
