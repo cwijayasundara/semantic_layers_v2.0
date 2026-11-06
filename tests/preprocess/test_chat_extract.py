@@ -438,3 +438,36 @@ def test_sentences_do_not_split_inside_times_numbers_or_dotted_names(resolver, s
     assert "api-gateway deployed at 15:18, that lines up pretty well." in quotes
     assert any(q.endswith("property went 48 to 12 at 14:52.") and "minInstances" in q
                for q in quotes)
+
+
+def test_chunk_calls_overlap_and_output_matches_sequential(monkeypatch, resolver, scripted_llm):
+    import threading
+    import time
+
+    import e2ekg.preprocess.chat_extract as ce
+    rows = [{"raw_id": f"chat|c|{k}|1|x", "channel": f"ch{k % 3}", "ts_raw": f"{1000 + k}.000001",
+             "ts_utc": datetime(2026, 10, 14, 22, 0, k % 60, tzinfo=UTC), "user": "U1",
+             "thread_ts": None, "subtype": None,
+             "text": "TMS latency is way up, maybe the ASG scaled in" if k % 2 else "looking"}
+            for k in range(3 * ce.CHUNK)]
+    df = pl.DataFrame(rows)
+    live, peak, lock = [0], [0], threading.Lock()
+
+    class Slow:
+        def structured(self, system, user, schema):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.2 if "ch0" in user else 0.05)   # the first chunk finishes last
+            try:
+                return scripted_llm.structured(system, user, schema)
+            finally:
+                with lock:
+                    live[0] -= 1
+
+    par = ce.extract_chat_full(df, resolver, Slow())
+    assert peak[0] > 1, "chunk calls never overlapped"
+    monkeypatch.setattr(ce, "PARALLEL_CALLS", 1)
+    seq = ce.extract_chat_full(df, resolver, Slow())
+    for a, b in zip(par, seq, strict=True):
+        assert a.equals(b)

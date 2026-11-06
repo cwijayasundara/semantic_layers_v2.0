@@ -33,6 +33,7 @@ Choices:
     string (`ts`) and `ts_utc` keeps microseconds."""
 import json
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 import polars as pl
@@ -45,6 +46,7 @@ CATEGORIES = ("incident", "question", "discussion", "decision")
 SENTIMENTS = ("positive", "neutral", "negative", "urgent")
 CLAIM_KINDS = ("observation", "hypothesis", "mitigation", "root_cause", "retraction")
 CHUNK = 40
+PARALLEL_CALLS = 4
 
 Category = Literal["incident", "question", "discussion", "decision"]
 Sentiment = Literal["positive", "neutral", "negative", "urgent"]
@@ -135,24 +137,32 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
     for ch in dict.fromkeys(r["channel"] for r in rows):
         idx = [i for i, r in enumerate(rows) if r["channel"] == ch]
         chunks += [idx[k:k + CHUNK] for k in range(0, len(idx), CHUNK)]
-    batch_of: dict[int, int] = {}      # message index -> id of the model call that answered it
-    gid = 0
-    for chunk in chunks:
+    def label(chunk: list[int]):
         local = {rows[i]["ts_raw"]: n for n, i in enumerate(chunk) if not rows[i]["subtype"]}
         items = [{"i": n, "user": rows[i]["user"], "ts": rows[i]["ts_raw"],
                   "thread_parent": local.get(rows[i]["thread_ts"]),
                   "text": rows[i]["text"] or ""} for n, i in enumerate(chunk)]
         try:
-            out = _call(llm, items)
-            groups = [(chunk, out)]
+            return [(chunk, _call(llm, items))], {}
         except (LLMContractError, LLMTransportError):
-            groups = []
+            groups, failed = [], {}
             for n, i in enumerate(chunk):
                 single = [{**items[n], "i": 0, "thread_parent": None}]
                 try:
                     groups.append(([i], _call(llm, single)))
                 except (LLMContractError, LLMTransportError) as e:
-                    results[i], errors[i] = None, f"{type(e).__name__}: {e}"
+                    failed[i] = f"{type(e).__name__}: {e}"
+            return groups, failed
+
+    batch_of: dict[int, int] = {}      # message index -> id of the model call that answered it
+    gid = 0
+    # Chunks are independent model calls; a live call takes ~70 s, so they run concurrently.
+    # map() keeps chunk order, so call ids and the output stay deterministic.
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        labelled = list(pool.map(label, chunks))
+    for groups, failed in labelled:
+        for i, err in failed.items():
+            results[i], errors[i] = None, err
         for members, out in groups:
             gid += 1
             flat = 0

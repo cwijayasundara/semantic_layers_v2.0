@@ -7,6 +7,7 @@ never touch the network."""
 import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -66,7 +67,7 @@ class FireworksClient:
                 last, contract = e, False
                 continue
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(result.model_dump_json())
             tmp.replace(path)           # atomic: readers never see a half-written entry
             return result
