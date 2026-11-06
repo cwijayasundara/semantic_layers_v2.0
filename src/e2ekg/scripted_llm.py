@@ -91,14 +91,26 @@ def _services(text: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def _thread_subject(items: list[dict], it: dict) -> list[str]:
+def _bare_nicknames(items: list[dict]) -> frozenset[str]:
+    """Lower-case first words of the service ids written in this batch ("evcache" for
+    evcache-titles): a model reads them as the service in later messages."""
+    ids = {s for it in items for s in _services(it["text"]) if "-" in s}
+    return frozenset(s.split("-")[0] for s in ids if len(s.split("-")[0]) >= 5)
+
+
+def _named(text: str, nicks: frozenset[str]) -> list[str]:
+    return _services(text) + [w for w in re.findall(r"\b[a-z]{5,}\b", text) if w in nicks]
+
+
+def _thread_subject(items: list[dict], it: dict, nicks: frozenset[str]) -> list[str]:
     """What a reply with no service of its own is about: the one service the thread's
-    first message names. A thread that names none, or several, has no single subject."""
+    first message names. A thread that names none, or several, has no single subject, and
+    a reply that names another service, even by nickname, is not about the thread's."""
     p = it.get("thread_parent")
-    if p is None or not 0 <= p < len(items):
+    if p is None or not 0 <= p < len(items) or _named(it["text"], nicks):
         return []
-    named = _services(items[p]["text"])
-    return named if len(named) == 1 else []
+    named = _named(items[p]["text"], nicks)
+    return _services(items[p]["text"]) if len(named) == 1 else []
 
 
 def _label(text: str) -> dict:
@@ -190,10 +202,11 @@ class ScriptedClient:
     def _batch(items: list[dict]):
         from e2ekg.preprocess.chat_extract import BatchExtraction
         out, flat = [], []      # flat: (message n, claim dict) in output order
+        nicks = _bare_nicknames(items)
         for n, it in enumerate(items):
             text = it["text"]
             claims = []
-            thread_subject = _thread_subject(items, it)
+            thread_subject = _thread_subject(items, it, nicks)
             for s, e in _sentences(text):
                 sentence = text[s:e]
                 kind = _kind(sentence)

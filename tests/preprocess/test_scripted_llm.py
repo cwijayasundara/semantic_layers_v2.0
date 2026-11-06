@@ -80,6 +80,18 @@ def test_a_reply_under_a_parent_naming_several_services_inherits_nothing():
     assert out.messages[1].claims[0].about_surface == []
 
 
+def test_a_reply_about_another_service_by_nickname_is_not_the_threads_service():
+    """"evcache" is written nowhere as evcache-titles in the reply, but the batch knows it as
+    the prefix of one, so the reply is not about TMS."""
+    out = run("if we scale TMS out fast the cold instances will hammer evcache-titles",
+              "evcache has headroom, warm-up plan looks fine", parents={1: 0})
+    assert out.messages[1].claims[0].about_surface == []
+    out = run("evcache-titles hit rate looks normal", "if we scale TMS out fast the cold "
+              "instances will hammer evcache, want a warm-up plan first",
+              "yes, bump min to 40 now", parents={2: 1})
+    assert out.messages[2].claims[0].about_surface == []
+
+
 def test_a_reply_naming_its_own_service_keeps_it_not_the_threads():
     out = run("api-gateway deployed at 15:18, that lines up pretty well",
               "starting a rollback of the TMS ASG", parents={1: 0})
