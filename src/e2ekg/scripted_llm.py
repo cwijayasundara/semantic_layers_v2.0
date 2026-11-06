@@ -8,7 +8,12 @@ unmeasured until a key exists.
 
   * `BatchExtraction` (chat): category, sentiment, claims with sentence spans, and
     retraction links to the latest earlier hypothesis about the same service in the
-    batch (or the thread parent's).
+    batch (or the thread parent's). Like a model it reads past a transposed-letter typo
+    (what chat.typo injects) in a word the rules know, surfaces short uppercase tokens
+    ("TMS", "HPG") as service mentions unless they are generic ops acronyms ("ASG",
+    "TTR"), and attributes a claim with no service of its own to the one service its
+    thread's first message names (never to a thread that names several). It only
+    attributes existing claims; it never creates one.
   * `Pick` (identity): choose the candidate whose initials spell the surface, or whose
     trailing words a nickname names ("the ranker", "the batch loader"), else none."""
 import json
@@ -18,7 +23,12 @@ _SERVICE_SUFFIX = ("svc", "api", "gateway", "loader", "ranker", "graphql", "allo
                    "titles", "web", "tv", "ios", "android", "db", "cache", "proxy", "router",
                    "worker", "store", "indexer", "resolver", "manager", "pipeline")
 _KEBAB = re.compile(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b")
-_ACRONYM = re.compile(r"\b(TMS|HPG)\b")
+_ACRONYM = re.compile(r"\b[A-Z]{2,5}\b(?!-\d)")
+_NOT_SERVICES = frozenset("""
+    ASG TTR CPU NPE PT UTC QA PR OK ID DB FYI LGTM ASAP SEV SLO SLA API HTTP URL TV TBD ETA IMO
+    AWS VPC ELB JVM GC TLS DNS TCP JSON CI CD UI UX TTL QPS RPS OOM EOD PM AM DM IIRC AFAIK WIP
+    SSH CLI NPES
+""".split())
 _NICK = re.compile(rf"\bthe (?:[a-z]+ )?(?:{'|'.join(_SERVICE_SUFFIX)})\b")
 _SENT = re.compile(r"(?:(?![.?!:]+(?:\s|$))[\s\S])+(?:[.?!:]+(?=\s|$)|$)")
 
@@ -39,17 +49,60 @@ _NEG = re.compile(r"slow|down|fail|error|exhaust|regress|pegged|elevated|broken|
 _POS = re.compile(r"thanks|great|clean|healthy|finished|fine|approved|resolved", re.I)
 _DECIDE = re.compile(r"^plan:|yes, do it|owner approved|going with|let's go|decided", re.I)
 _INCIDENT = re.compile(r"incident|INC-|latency|errors?|regress|outage|slow|rollback|"
-                       r"scale|exhaust|deadline|pool|asg|p99|ttr|degraded", re.I)
+                       r"scale|exhaust|deadline|pool|\basg\b|p99|\bttr\b|degraded", re.I)
+
+
+_WORD = re.compile(r"[A-Za-z]{4,}")
+
+
+_INFLECTIONS = ("rolling reverted scaling scaled applied regressed regression exhausted exhaustion "
+                "errors error deadlines instances instance candidates trace")
+_LEXICON = frozenset(
+    w.lower() for rx in (_RETRACT, _MITIGATE, _ROOT, _HYPO, _OBS, _URGENT, _NEG, _POS, _DECIDE,
+                         _INCIDENT)
+    for w in re.findall(r"[A-Za-z]{4,}", re.sub(r"\\.", " ", rx.pattern))) | set(_INFLECTIONS.split())
+
+
+def _swapped(a: str, b: str) -> bool:
+    """a is b with two adjacent letters transposed (what chat.typo makes). Dropped,
+    added or replaced letters are left alone: they turn real inflections into keywords
+    (approve -> approved)."""
+    d = [i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y]
+    return (len(a) == len(b) and len(d) == 2 and d[1] == d[0] + 1
+            and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]])
+
+
+def _repair(text: str) -> str:
+    """Reads past typos the way a model does: a word one edit away from exactly one word
+    the rules know becomes that word. Positions are not preserved; classify, don't slice."""
+    def fix(m: re.Match) -> str:
+        w = m.group().lower()
+        if w in _LEXICON:
+            return m.group()
+        hits = [k for k in _LEXICON if _swapped(w, k)]
+        return hits[0] if len(hits) == 1 else m.group()
+    return _WORD.sub(fix, text)
 
 
 def _services(text: str) -> list[str]:
     out = [m for m in _KEBAB.findall(text) if m.split("-")[-1] in _SERVICE_SUFFIX]
-    out += _ACRONYM.findall(text)
+    out += [a for a in _ACRONYM.findall(text) if a not in _NOT_SERVICES]
     out += _NICK.findall(text)
     return list(dict.fromkeys(out))
 
 
+def _thread_subject(items: list[dict], it: dict) -> list[str]:
+    """What a reply with no service of its own is about: the one service the thread's
+    first message names. A thread that names none, or several, has no single subject."""
+    p = it.get("thread_parent")
+    if p is None or not 0 <= p < len(items):
+        return []
+    named = _services(items[p]["text"])
+    return named if len(named) == 1 else []
+
+
 def _label(text: str) -> dict:
+    text = _repair(text)
     if _DECIDE.search(text):
         cat = "decision"
     elif text.rstrip().endswith("?") or text.lower().startswith(("which ", "who ", "why ")):
@@ -76,6 +129,7 @@ def _sentences(text: str) -> list[tuple[int, int]]:
 
 
 def _kind(sentence: str) -> str | None:
+    sentence = _repair(sentence)
     for kind, rx in (("retraction", _RETRACT), ("root_cause", _ROOT),
                      ("mitigation", _MITIGATE), ("hypothesis", _HYPO)):
         if rx.search(sentence):
@@ -139,6 +193,7 @@ class ScriptedClient:
         for n, it in enumerate(items):
             text = it["text"]
             claims = []
+            thread_subject = _thread_subject(items, it)
             for s, e in _sentences(text):
                 sentence = text[s:e]
                 kind = _kind(sentence)
@@ -148,6 +203,7 @@ class ScriptedClient:
                                                    else [])
                 if kind == "observation" and not surfaces:
                     surfaces = _services(text)
+                surfaces = surfaces or thread_subject
                 ref = None
                 if kind == "retraction":
                     mine = {x.lower() for x in surfaces}
