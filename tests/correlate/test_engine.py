@@ -127,9 +127,10 @@ def test_the_enricher_writes_the_chain_that_explains_the_live_incident(harvested
 T0 = datetime(2026, 10, 14, 22, 0, tzinfo=UTC)
 
 
-def sig(name: str, kind: str, app: str | None, minute: float, sev: float = 1.0) -> Signal:
+def sig(name: str, kind: str, app: str | None, minute: float, sev: float = 1.0,
+        opened_by: tuple[str, ...] = ()) -> Signal:
     return Signal(uri=f"urn:{name}", type=kind, app=app, at_utc=T0 + timedelta(minutes=minute),
-                  severity=sev)
+                  severity=sev, opened_by=tuple(f"urn:{a}" for a in opened_by))
 
 
 # edge -> mid -> svc (caller -> callee); the edge is every request's ancestor
@@ -155,9 +156,23 @@ def test_an_effect_up_the_callers_passes_the_gate_and_one_off_them_does_not():
     assert _linked([dep, up, off], dep, off, gate=False)
 
 
-def test_an_alert_anywhere_passes_the_gate():
-    dep, alert = sig("dep", "deployment", "svc", 0), sig("alert", "alert", "other", 3)
-    assert _linked([dep, alert], dep, alert)
+def test_an_alert_is_gated_like_telemetry():
+    dep = sig("dep", "deployment", "svc", 0)
+    up, off = sig("up", "alert", "edge", 3), sig("off", "alert", "other", 3)
+    assert _linked([dep, up, off], dep, up)
+    assert not _linked([dep, up, off], dep, off)
+    assert _linked([dep, up, off], dep, off, gate=False)
+
+
+def test_an_incident_is_caused_only_by_the_alert_its_page_names():
+    lat = sig("lat", "metric_anomaly", "svc", 0)
+    named, other = sig("named", "alert", "svc", 2), sig("other", "alert", "svc", 3)
+    inc = sig("inc", "incident", "other", 5, opened_by=("named",))
+    signals = [lat, named, other, inc]
+    for gate in (True, False):
+        assert {a for a, _ in candidate_links(signals, EDGES, gate)[inc]} == {named}
+    unpaged = sig("unpaged", "incident", "svc", 5)
+    assert unpaged not in candidate_links([lat, named, unpaged], EDGES)
 
 
 def test_a_change_landing_after_the_cascade_began_is_explained_away():
@@ -175,7 +190,8 @@ def test_a_change_landing_after_the_cascade_began_is_explained_away():
 def test_roles_people_make_changes_alerts_open_incidents_and_a_condition_does_not_cause_itself():
     m1, m2 = sig("m1", "metric_anomaly", "svc", 0), sig("m2", "metric_anomaly", "svc", 2)
     dep = sig("dep", "deployment", "svc", 3)
-    alert, inc = sig("alert", "alert", "svc", 4), sig("inc", "incident", "svc", 5)
+    alert = sig("alert", "alert", "svc", 4)
+    inc = sig("inc", "incident", "svc", 5, opened_by=("alert",))
     later = sig("later", "log_error", "svc", 6)
     signals = [m1, m2, dep, alert, inc, later]
     assert not _linked(signals, m1, m2)
@@ -189,7 +205,7 @@ def test_chains_run_from_a_source_one_per_root_ranked_and_cut_at_the_threshold()
     scale = sig("scale", "autoscaling", "svc", 2)
     lat = sig("lat", "metric_anomaly", "svc", 4)
     alert = sig("alert", "alert", "edge", 6)
-    inc = sig("inc", "incident", "edge", 8)
+    inc = sig("inc", "incident", "edge", 8, opened_by=("alert",))
     weak = sig("weak", "commit", None, 1)
     chains = correlate([cfg, scale, lat, alert, inc, weak], EDGES, "urn:inc")
     assert [[s.uri for s in c.links] for c in chains] == [

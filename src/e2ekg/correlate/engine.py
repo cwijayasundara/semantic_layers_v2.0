@@ -7,10 +7,11 @@ The candidate-link graph has an edge a -> b ("a may have caused b") when
   * 0 < b.at - a.at <= WINDOW;
   * the roles allow it: people and pipelines make deployments, config changes,
     experiments and commits, so nothing causes them (they are roots only); an alert
-    causes only an incident; an incident causes nothing; and two onsets of one
-    telemetry type on one app are one condition developing, not cause and effect;
-  * with the topology gate on (R9), b is on a.app, or b.app calls a.app transitively
-    (an effect travels up the callers), or b is an alert or incident; and a change a
+    causes only an incident, and an incident is caused only by the alert its opening
+    page names (R40); an incident causes nothing; and two onsets of one telemetry
+    type on one app are one condition developing, not cause and effect;
+  * with the topology gate on (R9, R40), b is on a.app, or b.app calls a.app
+    transitively (an effect travels up the callers), alerts included; and a change a
     may cause b only if b's cascade had not begun before a: no telemetry ancestor of b
     (through the gated telemetry links) is older than a. An effect whose degradation
     was already under way when the change landed is explained by what came before it
@@ -56,7 +57,6 @@ PRIORS: dict[tuple[str, str], float] = {
 }
 CHANGE_TYPES = frozenset(CHANGE_SIGNAL.values())
 ROOT_ONLY = CHANGE_TYPES - {"autoscaling"}      # autoscaling reacts to config and load
-SYMPTOM_TYPES = frozenset({"alert", "incident"})
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,7 @@ class Signal:
     at_utc: datetime
     severity: float                  # [0, 1]
     evidence: tuple[str, ...] = field(default=(), compare=False)   # node URIs it aggregates
+    opened_by: tuple[str, ...] = field(default=(), compare=False)  # an incident: its page's alerts
 
     def __post_init__(self):
         if self.type not in SIGNAL_TYPES:
@@ -91,6 +92,8 @@ def pair_score(a: Signal, b: Signal, prior: float) -> float:
 def may_cause(a: Signal, b: Signal) -> bool:
     if b.type in ROOT_ONLY or a.type == "incident":
         return False
+    if b.type == "incident":
+        return a.uri in b.opened_by
     if a.type == b.type and a.app == b.app and a.type not in CHANGE_TYPES:
         return False
     return a.type != "alert" or b.type == "incident"
@@ -117,7 +120,7 @@ class Topology:
         return self._up[app]
 
     def allows(self, a: Signal, b: Signal) -> bool:
-        if b.type in SYMPTOM_TYPES:
+        if b.type == "incident":            # its page names its cause (may_cause)
             return True
         if a.app is None or b.app is None:
             return False

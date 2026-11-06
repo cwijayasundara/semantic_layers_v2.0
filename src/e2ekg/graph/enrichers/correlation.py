@@ -11,7 +11,8 @@ only what was observable at its cutoff):
   experiment       ops:ExperimentAllocation                            ops:changedApp
   commit           ops:Commit                                          ops:changedApp
   alert            ops:Alert (firing time)                             ops:onApplication
-  incident         ops:Incident (creation time)                        ops:affects
+  incident         ops:Incident (creation time), the symptom only;     ops:affects
+                   opened by the alerts inc:openedBy/ops:forAlert names
   metric_anomaly   ops:Anomaly                                         ops:onApplication
   log_error        ops:LogSpike of a pattern with an ops:errorCategory  ops:onApplication
   slow_trace       ops:TraceEdgeFingerprint, signal type slow_trace     trc:caller, else callee
@@ -67,8 +68,11 @@ _EVENTS = _PFX + """SELECT ?s ?type ?app ?t WHERE {
   UNION { ?s a ops:Alert ; ops:atTime ?t . BIND("alert" AS ?type)
           OPTIONAL { ?s ops:onApplication ?app } }
 }"""
-_INCIDENT = _PFX + """SELECT ?t (MIN(STR(?a)) AS ?app) WHERE {
-  <%s> a ops:Incident ; ops:atTime ?t . OPTIONAL { <%s> ops:affects ?a } } GROUP BY ?t"""
+_INCIDENT = _PFX + """PREFIX inc: <https://kg.local/inc#>
+SELECT ?t (MIN(STR(?a)) AS ?app) (GROUP_CONCAT(DISTINCT STR(?alert); SEPARATOR=" ") AS ?alerts)
+WHERE { <%(s)s> a ops:Incident ; ops:atTime ?t .
+        OPTIONAL { <%(s)s> ops:affects ?a }
+        OPTIONAL { <%(s)s> inc:openedBy/ops:forAlert ?alert } } GROUP BY ?t"""
 _FINGERPRINTS = _PFX + """SELECT ?s ?type ?family ?app ?caller ?t ?end ?m WHERE {
   { ?s a ops:Anomaly ; ops:onSeries/met:metricName ?family . BIND("metric_anomaly" AS ?type) }
   UNION { ?s a ops:LogSpike ; ops:ofPattern ?family . ?family ops:errorCategory ?c .
@@ -117,11 +121,11 @@ def signals_from_store(store, symptom: str | None = None) -> list[Signal]:
     """Every change, alert and telemetry onset in the store, and the symptom if it is an
     incident. No other incident is a signal: history incidents explain nothing live."""
     out = []
-    rows = store.query(_INCIDENT % (symptom, symptom)) if symptom else []
+    rows = store.query(_INCIDENT % {"s": symptom}) if symptom else []
     for r in rows:
         out.append(Signal(uri=symptom, type="incident", app=_app(r["app"]),
                           at_utc=datetime.fromisoformat(r["t"]), severity=1.0,
-                          evidence=(symptom,)))
+                          evidence=(symptom,), opened_by=tuple((r["alerts"] or "").split())))
     for r in store.query(_EVENTS):
         kind = CHANGE_SIGNAL.get(r["type"], r["type"])
         out.append(Signal(uri=r["s"], type=kind, app=_app(r["app"]),
