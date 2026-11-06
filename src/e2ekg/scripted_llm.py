@@ -9,7 +9,8 @@ unmeasured until a key exists.
   * `BatchExtraction` (chat): category, sentiment, claims with sentence spans, and
     retraction links to the latest earlier hypothesis about the same service in the
     batch (or the thread parent's).
-  * `Pick` (identity): choose the candidate whose initials spell the surface, else none."""
+  * `Pick` (identity): choose the candidate whose initials spell the surface, or whose
+    trailing words a nickname names ("the ranker", "the batch loader"), else none."""
 import json
 import re
 
@@ -18,6 +19,7 @@ _SERVICE_SUFFIX = ("svc", "api", "gateway", "loader", "ranker", "graphql", "allo
                    "worker", "store", "indexer", "resolver", "manager", "pipeline")
 _KEBAB = re.compile(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b")
 _ACRONYM = re.compile(r"\b(TMS|HPG)\b")
+_NICK = re.compile(rf"\bthe (?:[a-z]+ )?(?:{'|'.join(_SERVICE_SUFFIX)})\b")
 _SENT = re.compile(r"[^.?!:]+(?:[.?!:]+|$)")
 
 _RETRACT = re.compile(r"scratch that|after all|ruling (?:them |it )?out", re.I)
@@ -43,6 +45,7 @@ _INCIDENT = re.compile(r"incident|INC-|latency|errors?|regress|outage|slow|rollb
 def _services(text: str) -> list[str]:
     out = [m for m in _KEBAB.findall(text) if m.split("-")[-1] in _SERVICE_SUFFIX]
     out += _ACRONYM.findall(text)
+    out += _NICK.findall(text)
     return list(dict.fromkeys(out))
 
 
@@ -115,6 +118,8 @@ class ScriptedClient:
 
         def fits(cand: str) -> bool:
             ct = [x for x in cand.split("-")]
+            if qt[:1] == ["the"] and len(qt) > 1:
+                return ct[-(len(qt) - 1):] == qt[1:]
             initials = "".join(p[0] for p in ct if p.isalpha())
             squashed = "".join(ct)
             if flat and flat == initials:

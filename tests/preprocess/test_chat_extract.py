@@ -384,3 +384,27 @@ def test_fireworks_client_transport_error_and_atomic_cache(tmp_path, monkeypatch
     monkeypatch.setattr(FireworksClient, "_structured_chat", lambda self, schema: Ok())
     assert c.structured("s", "u", Pick1).choice == "x"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_scripted_client_reads_a_nickname_like_a_model(resolver, scripted_llm):
+    """chat.nickname writes "the ranker" for row-ranker. A model reads it over the closed
+    candidate list, so the stand-in must too, or a walk-back replying to that message has
+    no claim on its parent to retract."""
+    df = _frame([
+        ("5000.000001", None, "the ranker is fine on CPU, but its calls are hitting the deadline"),
+        ("5001.000001", "5000.000001", "scratch that, I don't think it's row-ranker after all"),
+    ])
+    _, claims = extract_chat(df, resolver, scripted_llm)
+    parent = claims.filter(pl.col("raw_id") == df["raw_id"][0])
+    assert set(parent["about_app_uri"]) == {app_uri("row-ranker")}
+
+
+def test_scripted_pick_takes_a_nickname_only_when_one_candidate_fits(scripted_llm):
+    from e2ekg.preprocess.identity import Pick
+
+    def pick(surface, cands):
+        req = {"surface": surface, "core": surface, "context": "", "candidates": [*cands, "none"]}
+        return scripted_llm.structured("", json.dumps(req), Pick).choice
+    assert pick("the ranker", ["row-ranker", "geo-worker"]) == "row-ranker"
+    assert pick("the batch loader", ["title-batch-loader", "ab-allocator"]) == "title-batch-loader"
+    assert pick("the gateway", ["edge-gateway", "api-gateway"]) == "none"
