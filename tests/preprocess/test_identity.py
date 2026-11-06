@@ -140,9 +140,10 @@ def test_resolve_pass_columns(preprocessed_hero):
         assert {"app_uri", "app_method", "app_confidence", "surface_app"} <= set(df.columns)
         assert df["app_method"].null_count() == 0
     atlas = table(preprocessed_hero, "metrics_atlas")
-    unresolved = atlas.filter(pl.col("app_uri").is_null())     # only catalog-drift names
-    assert unresolved.height > 0 and all(
-        any(f'"{d}"' in tg for d in DRIFT) for tg in unresolved["tags"])
+    assert atlas["app_uri"].null_count() == 0            # the fixture ran with ScriptedClient
+    drift = atlas.filter(pl.col("app_method") == "llm")  # catalog-drift names: closed list
+    assert drift.height > 0 and all(
+        any(f'"{d}"' in tg for d in DRIFT) for tg in drift["tags"])
     cat = table(preprocessed_hero, "catalog")
     assert (cat["app_method"] == "exact").all()
     sp = table(preprocessed_hero, "spans")
@@ -158,3 +159,74 @@ def test_dir_derived_surface_is_flagged(preprocessed_hero):
     d = lg.filter(pl.col("log_format").is_in(["log4j", "nginx"]))
     assert d["app_from_dir"].all()
     assert not lg.filter(~pl.col("log_format").is_in(["log4j", "nginx"]))["app_from_dir"].any()
+
+
+@pytest.mark.parametrize("surface,wrong", [("artwork-meta", "artwork-svc"),
+                                           ("geo-db-10", "geo-db"),
+                                           ("ratings-db", "ratings-svc"),
+                                           ("profiles-db", "profile-svc")])
+def test_subset_names_do_not_fuzzy_match(resolver_no_llm, surface, wrong):
+    """token_set_ratio is 100 when the catalog name's tokens are a subset of the query's;
+    a query token the name lacks must veto the match."""
+    r = resolver_no_llm.resolve(surface)
+    assert (r.app != wrong and r.method != "fuzzy") or r.app == "artwork-metadata-svc"
+
+
+def test_abbreviated_token_resolves_to_the_app_that_covers_it(resolver_no_llm):
+    r = resolver_no_llm.resolve("artwork-meta")
+    assert (r.app, r.method) == ("artwork-metadata-svc", "fuzzy")
+    assert resolver_no_llm.resolve("geo-db-10").app is None
+
+
+def test_llm_prompt_carries_the_stripped_core(catalog):
+    fake = FakeClient({FakeClient.ANY_KEY: Pick(choice="none")})
+    Resolver(catalog, fake).resolve("tms-prod-v042")
+    assert json.loads(fake.calls[0][2])["core"] == "tms"
+
+
+def test_every_injected_surface_resolves_to_the_right_app(preprocessed_hero, catalog):
+    """Oracle (tests only): for each id.* injection in the manifest the surface the
+    generator wrote must resolve to the app it was written for, never to another app.
+    Names the catalog does not carry resolve through the closed LLM list."""
+    from fixtures.scripted_llm import ScriptedClient
+    r = Resolver(catalog, ScriptedClient())
+    seen = wrong = unresolved = 0
+    for inj in preprocessed_hero_injections(preprocessed_hero):
+        d = inj["detail"]
+        if inj["injector_id"] == "id.slack_only_rename" or "surface" not in d or "app" not in d:
+            continue
+        seen += 1
+        got = r.resolve(d["surface"]).app
+        wrong += got is not None and got != d["app"]
+        unresolved += got is None
+    assert seen > 500 and wrong == 0 and unresolved == 0
+
+
+def preprocessed_hero_injections(p):
+    m = json.loads((p.answers / "hero.manifest.json").read_text())
+    return [dict(i, detail=json.loads(i["detail"])) for i in m["injections"]
+            if i["injector_id"].startswith("id.")]
+
+
+def test_cli_llm_flag_builds_chat_tables(preprocessed_hero, tmp_path):
+    import subprocess
+    import sys
+    out = tmp_path / "proc"
+    base = [sys.executable, "-m", "e2ekg.cli", "preprocess", "--scenario", "hero", "--raw",
+            str(preprocessed_hero.raw.parent), "--out", str(out)]
+    p = subprocess.run([*base, "--llm", "scripted"], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert (out / "hero" / "derived" / "chat_messages.parquet").exists()
+    p = subprocess.run([*base, "--llm", "none"], capture_output=True, text=True)
+    assert p.returncode == 0 and not (out / "hero" / "derived" / "chat_messages.parquet").exists()
+
+
+def test_cli_fireworks_needs_a_key(preprocessed_hero, tmp_path):
+    import os
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k != "FIREWORKS_API_KEY"}
+    p = subprocess.run([sys.executable, "-m", "e2ekg.cli", "preprocess", "--scenario", "hero",
+                        "--raw", str(preprocessed_hero.raw.parent), "--out", str(tmp_path),
+                        "--llm", "fireworks"], capture_output=True, text=True, env=env)
+    assert p.returncode != 0 and "FIREWORKS_API_KEY" in p.stderr

@@ -79,3 +79,11 @@ class FakeClient:
         if isinstance(resp, Exception):
             raise resp
         return resp
+
+
+def __getattr__(name: str):
+    # ScriptedClient imports the pipeline schemas, which import this module: load lazily.
+    if name == "ScriptedClient":
+        from e2ekg.scripted_llm import ScriptedClient
+        return ScriptedClient
+    raise AttributeError(name)

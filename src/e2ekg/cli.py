@@ -51,11 +51,29 @@ def _raw_scenarios(raw: Path, name: str) -> list[str]:
     return [name]
 
 
+def make_llm(kind: str):
+    """`none` (no chat labels, no LLM identity), `scripted` (deterministic keyword rules, no
+    network) or `fireworks` (GLM; needs FIREWORKS_API_KEY)."""
+    import os
+    if kind == "none":
+        return None
+    if kind == "scripted":
+        from e2ekg.scripted_llm import ScriptedClient
+        return ScriptedClient()
+    if kind == "fireworks":
+        if not os.environ.get("FIREWORKS_API_KEY"):
+            raise SystemExit("--llm fireworks needs FIREWORKS_API_KEY in the environment")
+        from e2ekg.llm import FireworksClient
+        return FireworksClient()
+    raise SystemExit(f"unknown --llm {kind!r}")
+
+
 def _cmd_preprocess(args: argparse.Namespace) -> int:
     from e2ekg.preprocess.run import preprocess_scenario
     raw, out = Path(args.raw), Path(args.out)
+    llm = make_llm(args.llm)
     for name in _raw_scenarios(raw, args.scenario):
-        r = preprocess_scenario(raw / name, out / name, llm=None)
+        r = preprocess_scenario(raw / name, out / name, llm=llm)
         c = r.coverage
         print(f"{name}: {r.files} files, {sum(r.tables.values())} rows, "
               f"quarantine {r.quarantine}, coverage {c['bytes_covered']}/{c['bytes_total']} "
@@ -70,6 +88,8 @@ def _add_preprocess(sub) -> None:
     p.add_argument("--scenario", default="hero", help="hero, a v-... variant, or all")
     p.add_argument("--raw", default="data/raw")
     p.add_argument("--out", default="data/processed")
+    p.add_argument("--llm", choices=("none", "scripted", "fireworks"), default="none",
+                   help="chat labels and LLM identity picks; none leaves chat tables unbuilt")
     p.set_defaults(func=_cmd_preprocess)
 
 

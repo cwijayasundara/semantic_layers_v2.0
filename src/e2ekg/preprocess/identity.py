@@ -141,9 +141,19 @@ class Resolver:
         truncated nicknames ('artworkmeta') still make the LLM's closed candidate list."""
         q, qs = _tokens(s), _squash(s)
         best: dict[str, tuple[float, float]] = {}
+        qt = q.split()
         for name, app in self._names:
-            ts = fuzz.token_set_ratio(q, name)
-            rk = max(ts, fuzz.partial_ratio(qs, _squash(name)) * 0.9 if len(qs) >= 4 else 0)
+            # token_set_ratio scores 100 when the NAME's tokens are a subset of the query's
+            # ("artwork-meta" vs alias "artwork", "geo-db-10" vs "geo-db"), so a match must
+            # also be covered: every query token equals or abbreviates (prefix of) a token of
+            # the name. Numbers must match exactly.
+            nt = name.split()
+            covered = all(any(n == w or (not w.isdigit() and len(w) >= 3 and n.startswith(w))
+                              for n in nt) for w in qt)
+            ts = max(fuzz.token_set_ratio(q, name), 100.0 - 4 * max(len(nt) - len(qt), 0)) \
+                if covered else 0.0
+            rk = max(fuzz.token_set_ratio(q, name) * 0.95 if not covered else ts,
+                     fuzz.partial_ratio(qs, _squash(name)) * 0.9 if len(qs) >= 4 else 0)
             old = best.get(app, (-1.0, -1.0))
             best[app] = (max(old[0], ts), max(old[1], rk))
         return sorted(((a, ts, rk) for a, (ts, rk) in best.items()),
@@ -198,7 +208,8 @@ class Resolver:
         cands = self.candidates(core, context, ranked)
         if not cands:
             return None
-        user = json.dumps({"surface": surface, "context": context, "candidates": [*cands, "none"]})
+        user = json.dumps({"surface": surface, "core": core, "context": context,
+                           "candidates": [*cands, "none"]})
         try:
             pick = self.llm.structured(SYSTEM, user, Pick)
         except Exception:  # contract error or transport failure: stay unresolved
@@ -210,7 +221,7 @@ def llm_user_prompt(resolver: Resolver, surface: str, context: str = "") -> str:
     """The exact user prompt `resolve` would send (tests key a FakeClient with it)."""
     core = list(resolver._strip_chain(surface.strip()))[-1]
     cands = resolver.candidates(core, context, resolver._fuzzy(core))
-    return json.dumps({"surface": surface.strip(), "context": context,
+    return json.dumps({"surface": surface.strip(), "core": core, "context": context,
                        "candidates": [*cands, "none"]})
 
 
