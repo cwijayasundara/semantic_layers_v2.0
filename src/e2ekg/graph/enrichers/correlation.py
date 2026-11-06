@@ -23,13 +23,15 @@ ops:LogPattern's time is when it was first seen in the window, not an onset).
 
 Fingerprints fold into onsets (`onsets`): a detection inside a running episode of its
 series family (a metric name, a log pattern, a trace edge) is that condition seen
-again, and episodes of one (type, app) that start in the same minute are one event.
+again, for at most the correlation window (a chronic condition must not absorb the
+onset a change causes inside it), and episodes of one (type, app) that start in the same minute are one event.
 Each onset is one Signal at its earliest detection, with the highest severity, citing
 every detection. A trace edge's app is its caller, the application that waits on the
 slow or failing call.
 
 Severity squashes a fingerprint's magnitude by the magnitude its detector fires at,
-m / (m + m_fire), so a signal at its threshold is 0.5 and a far larger one nears 1.
+m / (m + m_fire), so a signal at its threshold is 0.5 and a far larger one nears 1. A
+fingerprint with no magnitude deviated from a zero baseline: severity 1.
 Changes, alerts and incidents are declared events, not estimates: severity 1.
 
 The symptom is the harvest's (HarvestContext.symptom: the live incident, or in a
@@ -44,18 +46,19 @@ from datetime import datetime
 from rdflib import URIRef
 from rdflib.namespace import RDF
 
-from e2ekg.correlate.engine import DEFAULT_PRIOR, PRIORS, Chain, Signal, correlate
+from e2ekg.correlate.engine import DEFAULT_PRIOR, PRIORS, WINDOW_S, Chain, Signal, correlate
 from e2ekg.graph.enricher import NS, Enricher, dec, integer, node, ts
+from e2ekg.graph.enrichers.logs import Z_MIN as LOG_SPIKE_Z
 from e2ekg.graph.enrichers.traces import SLOW_RATIO
+from e2ekg.graph.enrichers.traces import Z as FAILED_TRACE_Z
 from e2ekg.graph.uris import app_uri, concept
 from e2ekg.preprocess.identity import APP_URI_PREFIX
-from e2ekg.preprocess.logtemplates import Z_MIN as LOG_SPIKE_Z
 from e2ekg.preprocess.metrics_clean import SHIFT_MIN
 from e2ekg.scenario.model import CHANGE_SIGNAL, SIGNAL_TYPES
 
 OPS, PROV = NS["ops"], NS["prov"]
 FIRES_AT = {"metric_anomaly": SHIFT_MIN, "log_error": LOG_SPIKE_Z,
-            "slow_trace": SLOW_RATIO, "failed_trace": SLOW_RATIO}
+            "slow_trace": SLOW_RATIO, "failed_trace": FAILED_TRACE_Z}
 _PFX = """PREFIX ops: <https://kg.local/ops#>
 PREFIX trc: <https://kg.local/trc#>
 PREFIX met: <https://kg.local/met#>
@@ -90,9 +93,11 @@ def _app(u: str | None) -> str | None:
 
 
 def severity(kind: str, magnitude: float | None) -> float:
-    m_fire = FIRES_AT[kind]
-    m = m_fire if magnitude is None else max(magnitude, 0.0)
-    return m / (m + m_fire)
+    """None: the detector found no finite magnitude (a deviation over a zero baseline)."""
+    if magnitude is None:
+        return 1.0
+    m = max(magnitude, 0.0)
+    return m / (m + FIRES_AT[kind])
 
 
 def onsets(rows: list[dict]) -> list[Signal]:
@@ -104,7 +109,7 @@ def onsets(rows: list[dict]) -> list[Signal]:
     for (kind, app, _), group in families.items():
         began, end = None, None
         for r in sorted(group, key=lambda r: (r["t"], r["s"])):
-            if end is None or r["t"] >= end:
+            if end is None or r["t"] >= end or (r["t"] - began).total_seconds() >= WINDOW_S:
                 began, end = r["t"].replace(second=0, microsecond=0), r["end"]
             end = max(end, r["end"])
             events[(kind, app, began)].append(r)

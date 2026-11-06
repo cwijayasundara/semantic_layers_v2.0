@@ -7,7 +7,9 @@ import pytest
 from e2ekg.correlate.engine import (
     CHANGE_TYPES, PRIORS, Signal, candidate_links, correlate, pair_score,
 )
-from e2ekg.graph.enrichers.correlation import priors_with_history, severity, signals_from_store
+from e2ekg.graph.enrichers.correlation import (
+    onsets, priors_with_history, severity, signals_from_store,
+)
 from e2ekg.graph.uris import change_uri
 from e2ekg.scenario.hero import hero_scenario
 from e2ekg.scenario.topology import upstream_closure
@@ -114,8 +116,24 @@ def test_one_signal_per_type_app_and_onset_minute(harvested_hero_as_of):
 def test_severity_is_half_at_the_detector_threshold_and_below_one_for_huge_magnitudes():
     assert severity("metric_anomaly", 5.0) == 0.5
     assert severity("log_error", 6.0) == 0.5
+    assert severity("slow_trace", 2.0) == 0.5
+    assert severity("failed_trace", 6.0) == 0.5          # 6 binomial sigmas, its own threshold
     assert 0.99 < severity("metric_anomaly", 1780.0) < 1.0
     assert severity("slow_trace", 2.0) < severity("slow_trace", 20.0)
+
+
+def test_a_deviation_over_a_zero_baseline_has_no_finite_magnitude_and_full_severity():
+    assert severity("slow_trace", None) == severity("metric_anomaly", None) == 1.0
+
+
+def _fp(name, t, minutes, family="f"):
+    return {"s": f"urn:{name}", "type": "metric_anomaly", "app": "svc", "family": family,
+            "t": T0 + timedelta(minutes=t), "end": T0 + timedelta(minutes=t + minutes), "m": 6.0}
+
+
+def test_a_chronic_episode_folds_at_most_a_window_of_detections():
+    rows = [_fp("a", 0, 6), _fp("b", 5, 6), _fp("c", 9, 6), _fp("d", 12, 6), _fp("e", 30, 2)]
+    assert sorted((s.at_utc - T0).total_seconds() / 60 for s in onsets(rows)) == [0, 12, 30]
 
 
 def test_the_enricher_writes_the_chain_that_explains_the_live_incident(harvested_hero_as_of,

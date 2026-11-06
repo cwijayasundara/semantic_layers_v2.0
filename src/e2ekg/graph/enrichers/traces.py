@@ -14,12 +14,14 @@ p50/p99 duration and error rate. Its rows partition the spans table, so:
     with at least 3 errors). The onset threshold holds for the whole run, which
     ends after more than 2 minutes back under it. Minutes with fewer than 3
     spans never start or extend a run. A slow_trace window also needs a
-    second minute over the threshold or at least 20 spans. ops:magnitude is the peak over the
-    baseline (none over a 0 ms baseline); trc:p50Ms / trc:p99Ms are the peak per-minute values; the
+    second minute over the threshold or at least 20 spans. ops:magnitude is the detector's
+    own statistic at its peak: for slow_trace the p50 over the baseline (none over a 0 ms
+    baseline), for failed_trace the excess error rate in binomial sigmas; trc:p50Ms / trc:p99Ms are the peak per-minute values; the
     selector covers exactly the window's minutes, so ops:count = its spans.
 e2e_bottleneck (the critical-path edge of one request) needs per-trace
 analysis and is not emitted."""
 from datetime import timedelta
+from math import inf
 
 import numpy as np
 import polars as pl
@@ -92,6 +94,13 @@ def failed_windows(rate: np.ndarray, n: np.ndarray) -> list[tuple[int, int, floa
     return runs(rate, ok, threshold)
 
 
+def _peak_sigmas(rate: np.ndarray, n: np.ndarray, p0: float) -> float:
+    """The window's largest excess error rate over p0, in binomial sigmas (the failed_trace
+    detector's own statistic)."""
+    ok = n >= MIN_SPANS
+    return float(((rate[ok] - p0) / np.sqrt(p0 * (1 - p0) / n[ok])).max())
+
+
 def _app(u: str | None) -> URIRef | None:
     return URIRef(u) if u else None
 
@@ -128,12 +137,15 @@ class TraceFingerprintEnricher(Enricher):
                 for i, j, base in found:
                     span = slice(i, j + 1)
                     nn = cols["n"][span]
-                    peak = (cols["p50_ms"] if kind == "slow_trace" else cols["error_rate"])[span]
+                    if kind == "slow_trace":
+                        magnitude = float(cols["p50_ms"][span].max()) / base if base else inf
+                    else:
+                        magnitude = _peak_sigmas(cols["error_rate"][span], nn, base)
                     windows.append({
                         "key": key, "caller": caller, "callee": callee, "kind": kind,
                         "start": t0 + i * MINUTE, "end": t0 + (j + 1) * MINUTE,
                         "n": int(nn.sum()),
-                        "magnitude": float(peak.max()) / base if base else float("inf"),
+                        "magnitude": magnitude,
                         "p50": float(cols["p50_ms"][span].max()),
                         "p99": float(cols["p99_ms"][span].max()),
                         "rate": float((cols["error_rate"][span] * nn).sum() / nn.sum())})

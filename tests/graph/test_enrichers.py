@@ -324,6 +324,21 @@ def test_a_slow_trace_over_a_zero_ms_baseline_has_no_magnitude():
     assert fps and not [s for s, p, _ in triples if s in fps and p == OPS.magnitude]
 
 
+def test_a_failed_trace_magnitude_is_its_peak_excess_in_binomial_sigmas():
+    from datetime import UTC, datetime, timedelta
+
+    from e2ekg.graph.enrichers.traces import TraceFingerprintEnricher
+    a, b = "https://kg.local/app/application/a", "https://kg.local/app/application/b"
+    t0 = datetime(2026, 10, 11, 22, 0, tzinfo=UTC)
+    fp = pl.DataFrame([{"key": f"{a}>{b}", "caller_uri": a, "callee_uri": b,
+                        "minute": t0 + timedelta(minutes=i), "n": 100, "p50_ms": 10.0,
+                        "p99_ms": 20.0, "error_rate": 0.01 if i < 60 else 0.1}
+                       for i in range(61)])
+    _, windows = TraceFingerprintEnricher().analyze(fp)
+    (w,) = [w for w in windows if w["kind"] == "failed_trace"]
+    assert w["magnitude"] == pytest.approx((0.1 - 0.01) / (0.01 * 0.99 / 100) ** 0.5)
+
+
 @pytest.mark.parametrize("store", ["harvested_hero", "harvested_hero_as_of"])
 def test_fingerprint_counts_equal_their_selectors(request, preprocessed_hero, store):
     n, bad = fingerprint_count_mismatches(request.getfixturevalue(store).store,
