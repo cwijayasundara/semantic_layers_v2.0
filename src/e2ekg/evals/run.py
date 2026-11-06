@@ -37,6 +37,7 @@ from e2ekg.agent.autorca import FailedRCA, run_rca
 from e2ekg.agent.report import Hypothesis, RCAReport
 from e2ekg.agent.tools import make_tools
 from e2ekg.correlate.engine import MIN_CONFIDENCE, correlate
+from e2ekg.evals.arms import ARMS, ENGINE_ARMS, LLM_ARMS
 from e2ekg.evals.rawview import ensure_raw_view
 from e2ekg.evals.raw_only import run_raw_only
 from e2ekg.evals.score import evidence_checker, load_answers, score, scenario_change
@@ -45,9 +46,6 @@ from e2ekg.graph.store import Store
 from e2ekg.llm import MODEL_ID
 from e2ekg.preprocess import asof
 
-LLM_ARMS = ("graph", "graph_no_evidence_tool", "raw_only")
-ENGINE_ARMS = ("engine_top", "engine_no_topology", "engine_no_explain_away")
-ARMS = (*LLM_ARMS, *ENGINE_ARMS)
 ENGINE_SWITCHES = {"engine_top": {}, "engine_no_topology": {"topology_gate": False},
                    "engine_no_explain_away": {"explain_away": False}}
 ABLATION_BEAM = 80

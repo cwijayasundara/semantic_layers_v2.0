@@ -307,6 +307,88 @@ def _add_rca(sub) -> None:
     p.set_defaults(func=_cmd_rca)
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from e2ekg.evals.run import resolve_arms, resolve_scenarios, run_evals, summarize
+    root = Path(args.root)
+    try:
+        scenarios = resolve_scenarios(root, args.scenarios)
+        arms = resolve_arms(args.arms)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    if args.summarize_only:
+        if not args.run_dir:
+            raise SystemExit("--summarize-only needs --run-dir")
+        summarize(Path(args.run_dir), root)
+        run_dir, errors = Path(args.run_dir), 0
+    else:
+        run_dir, _, ex = run_evals(scenarios, args.runs, arms, root=root,
+                                   run_dir=Path(args.run_dir) if args.run_dir else None,
+                                   max_runs=args.max_runs, model=args.model)
+        errors = len(ex.errors)
+        print(f"{len(ex.done)} run, {len(ex.skipped)} already done, {len(ex.deferred)} left "
+              f"for --max-runs, {errors} raised", flush=True)
+    print(f"run dir {run_dir}\n{(run_dir / 'summary.md').read_text()}")
+    return 1 if errors else 0
+
+
+def _add_eval(sub) -> None:
+    from e2ekg.evals.arms import ARMS
+    p = sub.add_parser("eval", help="score the RCA arms across the scenarios (resumable; the "
+                                    "LLM arms need FIREWORKS_API_KEY)")
+    p.add_argument("--scenarios", default="all", help="comma list of scenarios, or all")
+    p.add_argument("--runs", type=int, default=3, help="runs per LLM arm and scenario")
+    p.add_argument("--arms", default="all", help=f"comma list of {', '.join(ARMS)}, or all")
+    p.add_argument("--root", default="data", help="data root (graph/, processed/, raw/)")
+    p.add_argument("--run-dir", default=None,
+                   help="resume this run directory (default: a new <root>/evals/<timestamp>)")
+    p.add_argument("--max-runs", type=int, default=None,
+                   help="stop after this many LLM runs in this invocation")
+    p.add_argument("--model", default=None, help="chat model (default: the project's GLM)")
+    p.add_argument("--summarize-only", action="store_true",
+                   help="rescore and rewrite the summary of --run-dir without running anything")
+    p.set_defaults(func=_cmd_eval)
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    from e2ekg.flywheel.adapt import APPROVALS, record_approval
+    path = Path(args.file) if args.file else APPROVALS
+    record_approval(args.scenario, args.root_uri, args.by, path)
+    print(f"recorded {args.by}'s approval of {args.root_uri} for {args.scenario} in {path}")
+    return 0
+
+
+def _cmd_adapt(args: argparse.Namespace) -> int:
+    import polars as pl
+
+    from e2ekg.flywheel.adapt import APPROVALS, adapt
+    results = Path(args.run_dir) / "results.parquet"
+    if not results.is_file():
+        raise SystemExit(f"{results} not found; run `e2ekg eval --summarize-only` first")
+    made = adapt(_open_store(args.store), pl.read_parquet(results),
+                 Path(args.approvals) if args.approvals else APPROVALS)
+    print(f"{len(made)} patterns written to {args.store}")
+    for u in made:
+        print(f"  {u}")
+    return 0
+
+
+def _add_flywheel(sub) -> None:
+    p = sub.add_parser("approve", help="record a person's approval of a root cause, which lets "
+                                       "a top-1 correct chain become a pattern")
+    p.add_argument("--scenario", required=True)
+    p.add_argument("--root-uri", required=True, help="the change URI the report named")
+    p.add_argument("--by", required=True, help="who approved it")
+    p.add_argument("--file", default=None, help="approvals file (default data/evals/approvals.jsonl)")
+    p.set_defaults(func=_cmd_approve)
+    q = sub.add_parser("adapt", help="write ops:Patterns for the approved, top-1 correct chains "
+                                     "of an eval into a history store (never an as-of store)")
+    q.add_argument("--run-dir", required=True, help="an eval run directory with results.parquet")
+    q.add_argument("--store", required=True, help="the history store to write, e.g. "
+                                                  "data/graph/hero/store")
+    q.add_argument("--approvals", default=None)
+    q.set_defaults(func=_cmd_adapt)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="e2ekg")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -316,6 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_harvest(sub)
     _add_ontology(sub)
     _add_rca(sub)
+    _add_eval(sub)
+    _add_flywheel(sub)
     return parser
 
 

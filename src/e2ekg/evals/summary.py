@@ -1,7 +1,7 @@
 """The markdown summary of an eval: tables from the scored runs (`run.score_runs`)."""
 import polars as pl
 
-from e2ekg.evals.run import ARMS, ENGINE_ARMS, LLM_ARMS
+from e2ekg.evals.arms import ARMS, ENGINE_ARMS, LLM_ARMS
 
 
 def _arms(df: pl.DataFrame) -> list[str]:
