@@ -246,7 +246,7 @@ def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], sympt
     late = _late_roots(causes, symptom) if (gate if explain_away is None else explain_away) else set()
     to_root: dict[Signal, float] = {}         # fewest links back to a root change
     for b in sorted(set(signals), key=_order):
-        if b not in causes:
+        if not causes.get(b):
             to_root[b] = 0 if b.type in CHANGE_TYPES else inf
         else:
             to_root[b] = 1 + min(to_root[a] for a, _ in causes[b])

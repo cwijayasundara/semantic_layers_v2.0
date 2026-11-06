@@ -362,3 +362,18 @@ def test_a_wider_beam_finds_the_roots_a_narrow_one_drops():
     narrow = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=1)}
     wide = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=80)}
     assert narrow < wide and len(wide) == 4
+
+
+def test_a_signal_whose_every_cause_was_explained_away_has_no_cause_and_is_no_crash():
+    """An onset of a condition already under way takes no cause from a later change. With that
+    change its only candidate, the signal is left with none; the ablations still rank."""
+    cfg = sig("cfg", "config_change", "svc", 0)
+    first = sig("first", "log_error", "svc", 1)
+    later = sig("later", "deployment", "svc", 4)
+    again = sig("again", "log_error", "svc", 10.5)
+    alert = sig("alert", "alert", "edge", 12)
+    inc = sig("inc", "incident", "edge", 13, opened_by=("alert",))
+    signals = [cfg, first, later, again, alert, inc]
+    assert candidate_links(signals, EDGES).get(again) == []
+    chains = correlate(signals, EDGES, "urn:inc", min_confidence=0.0)
+    assert [c.links[0].uri for c in chains] == ["urn:later"]
