@@ -11,9 +11,12 @@
     offset/length, or that point past the end of a file or at a missing file.
 It trusts nothing but the raw bytes and the ids."""
 import hashlib
+import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
+import duckdb
 import polars as pl
 
 from e2ekg.rawid import RawSpan, raw_id
@@ -98,3 +101,95 @@ def check_coverage(raw_root: Path, processed_root: Path) -> CoverageReport:
                    for r in df["raw_id"]]
     return CoverageReport(files=len(files), bytes_total=bytes_total, bytes_covered=bytes_covered,
                           gaps=gaps, overlaps=overlaps, mismatches=mismatches)
+
+
+# -- reachability ---------------------------------------------------------------
+# Every parsed row must reach the graph: either a fingerprint's selector selects it
+# (logs, metrics, spans), or the row becomes a node directly in Task 12 (events,
+# alerts, pages, incidents, catalog and chat rows). Quarantine rows are not parsed rows;
+# the byte ledger above already accounts for them.
+DIRECT_TABLES = ("events", "alerts", "pages", "incidents", "catalog", "slack")
+SELECTED = {"logs": ("logs",), "metrics": ("metrics_atlas", "metrics_prom"), "spans": ("spans",)}
+
+
+@dataclass
+class ReachabilityReport:
+    rows_total: int
+    rows_reachable: int
+    unreachable_raw_ids: list[str]
+    # raw ids a selector selects that are not in the parsed tables (a deleted row)
+    phantom_raw_ids: list[str] = field(default_factory=list)
+    by_table: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return not self.unreachable_raw_ids and not self.phantom_raw_ids and (
+            self.rows_reachable == self.rows_total)
+
+
+def _selectors(fingerprint_tables: dict[str, pl.DataFrame]) -> dict[str, pl.DataFrame]:
+    by_source: dict[str, list[dict]] = {}
+    for df in fingerprint_tables.values():
+        if "selector" not in df.columns:
+            continue
+        for s in df["selector"].unique().to_list():
+            d = json.loads(s)
+            by_source.setdefault(d["source"], []).append({
+                "app_uri": d["app_uri"], "key": d["key"],
+                "t_start": datetime.fromisoformat(d["t_start"]),
+                "t_end": datetime.fromisoformat(d["t_end"])})
+    schema = {"app_uri": pl.String, "key": pl.String,
+              "t_start": pl.Datetime("us", "UTC"), "t_end": pl.Datetime("us", "UTC")}
+    return {src: pl.DataFrame(by_source.get(src, []), schema=schema) for src in SELECTED}
+
+
+def check_reachability(proc_root: Path, fingerprint_tables: dict[str, pl.DataFrame]
+                       ) -> ReachabilityReport:
+    proc = Path(proc_root)
+    sels = _selectors(fingerprint_tables)
+    con = duckdb.connect()
+    total = reachable = 0
+    unreachable: list[str] = []
+    phantom: list[str] = []
+    by_table: dict[str, dict[str, int]] = {}
+
+    def count(table: str) -> int:
+        path = (proc / f"{table}.parquet").as_posix()
+        return con.execute(f"SELECT count(*) FROM read_parquet('{path}')").fetchall()[0][0]
+
+    for t in DIRECT_TABLES:
+        n = count(t)
+        total += n
+        reachable += n
+        by_table[t] = {"rows": n, "reachable": n}
+
+    for source, tables in SELECTED.items():
+        spans = source == "spans"
+        ident = "raw_id || '#' || CAST(span_index AS VARCHAR)" if spans else "raw_id"
+        actual = " UNION ALL ".join(
+            f"SELECT {ident} AS id, raw_id FROM read_parquet('{proc.as_posix()}/{t}.parquet')"
+            for t in tables)
+        rows = (proc / "derived" / f"rows_{source}.parquet").as_posix()
+        con.register("sel", sels[source].to_arrow())
+        got = (f"SELECT DISTINCT {ident} AS id FROM read_parquet('{rows}') r JOIN sel s "
+               "ON r.app_uri IS NOT DISTINCT FROM s.app_uri AND (s.key IS NULL OR r.key = s.key) "
+               "AND ((s.t_start = s.t_end AND r.ts_utc IS NULL) "
+               "OR (r.ts_utc >= s.t_start AND r.ts_utc < s.t_end))")
+        con.execute(f"CREATE OR REPLACE TEMP TABLE actual AS {actual}")
+        con.execute(f"CREATE OR REPLACE TEMP TABLE got AS {got}")
+        n = con.execute("SELECT count(*) FROM actual").fetchall()[0][0]
+        miss = [r[0] for r in con.execute(
+            "SELECT DISTINCT raw_id FROM actual WHERE id NOT IN (SELECT id FROM got) "
+            "ORDER BY raw_id").fetchall()]
+        n_miss = con.execute("SELECT count(*) FROM actual WHERE id NOT IN (SELECT id FROM got)"
+                         ).fetchall()[0][0]
+        ghost = [r[0] for r in con.execute(
+            "SELECT DISTINCT split_part(id, '#', 1) FROM got WHERE id NOT IN "
+            "(SELECT id FROM actual) ORDER BY 1").fetchall()]
+        total += n
+        reachable += n - n_miss
+        unreachable += miss
+        phantom += ghost
+        by_table[source] = {"rows": n, "reachable": n - n_miss}
+    con.close()
+    return ReachabilityReport(total, reachable, unreachable, phantom, by_table)

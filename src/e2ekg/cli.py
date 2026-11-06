@@ -73,11 +73,68 @@ def _add_preprocess(sub) -> None:
     p.set_defaults(func=_cmd_preprocess)
 
 
+def _cmd_ledger(args: argparse.Namespace) -> int:
+    import json
+
+    from e2ekg.preprocess.fingerprints import load_fingerprints
+    from e2ekg.preprocess.ledger import check_coverage, check_reachability
+    if args.proc:
+        targets = [(Path(args.proc).name, Path(args.proc))]
+    else:
+        out = Path(args.out)
+        names = sorted(p.name for p in out.iterdir() if (p / "ledger.json").exists()) \
+            if out.is_dir() else []
+        if args.scenario != "all":
+            names = [n for n in names if n == args.scenario]
+        if not names:
+            raise SystemExit(f"no processed scenario {args.scenario!r} under {out}")
+        targets = [(n, out / n) for n in names]
+    bad = 0
+    for name, proc in targets:
+        problems: list[str] = []
+        recorded = json.loads((proc / "ledger.json").read_text()) \
+            if (proc / "ledger.json").exists() else {}
+        raw = Path(args.raw) / name
+        if raw.is_dir():
+            c = check_coverage(raw, proc)
+            print(f"{name}: coverage {c.bytes_covered}/{c.bytes_total} bytes, files {c.files}, "
+                  f"gaps {len(c.gaps)}, overlaps {len(c.overlaps)}, "
+                  f"mismatches {len(c.mismatches)}")
+            if c.gaps or c.overlaps or c.mismatches or c.bytes_covered != c.bytes_total:
+                problems.append("byte coverage")
+        else:
+            print(f"{name}: coverage skipped (no raw tree at {raw})")
+        r = check_reachability(proc, load_fingerprints(proc))
+        print(f"{name}: reachable {r.rows_reachable}/{r.rows_total} rows, "
+              f"unreachable {len(r.unreachable_raw_ids)} raw ids, "
+              f"phantom {len(r.phantom_raw_ids)}")
+        if not r.ok:
+            problems.append("reachability")
+        import polars as pl
+        for t, n in (recorded.get("tables") or {}).items():
+            have = pl.scan_parquet(proc / f"{t}.parquet").select(pl.len()).collect().item()
+            if have != n:
+                problems.append(f"table {t}: {have} rows, ledger.json says {n}")
+        print(f"{name}: {'FAIL ' + '; '.join(problems) if problems else 'OK'}", flush=True)
+        bad += bool(problems)
+    return 1 if bad else 0
+
+
+def _add_ledger(sub) -> None:
+    p = sub.add_parser("ledger", help="byte coverage and fingerprint reachability proofs")
+    p.add_argument("--scenario", default="hero", help="hero, a v-... variant, or all")
+    p.add_argument("--out", default="data/processed", help="processed root")
+    p.add_argument("--raw", default="data/raw", help="raw root (coverage is skipped if absent)")
+    p.add_argument("--proc", default=None, help="one processed scenario directory")
+    p.set_defaults(func=_cmd_ledger)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="e2ekg")
     sub = parser.add_subparsers(dest="command", required=True)
     _add_generate(sub)
     _add_preprocess(sub)
+    _add_ledger(sub)
     return parser
 
 
