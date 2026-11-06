@@ -21,6 +21,7 @@ nothing and is retried next time; a run that ends without a report is a finished
 scored a failure. `summarize` scores the files into `results.parquet` and `summary.md`.
 Only the scorer reads `_answers` (R22): the arms see the as-of store or the as-of raw view."""
 import json
+import os
 import subprocess
 import sys
 import time
@@ -210,7 +211,7 @@ def run_one(spec: RunSpec, *, root: Path, evals_dir: Path,
 
 def _write_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")   # processes may share a run dir
     tmp.write_text(json.dumps(obj, indent=1, default=str))
     tmp.replace(path)
 

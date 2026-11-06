@@ -327,3 +327,23 @@ def test_root_facts_accepts_a_bare_external_id_as_a_raw_only_report_names_it():
     assert _root_facts(st, str(chg)) == ("config_change", str(app))
     assert _root_facts(st, "fpc-3be29b76c7f9") == ("config_change", str(app))
     assert _root_facts(st, 'nope" } SELECT') == (None, None)
+
+
+def test_concurrent_writers_of_one_json_file_never_collide(tmp_path):
+    import multiprocessing as mp
+
+    from e2ekg.evals.run import _write_json
+    target = tmp_path / "meta.json"
+    procs = [mp.get_context("spawn").Process(target=_hammer, args=(target, k)) for k in range(4)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    assert all(p.exitcode == 0 for p in procs)
+    assert target.exists() and not list(tmp_path.glob("*.tmp"))
+
+
+def _hammer(target, k):
+    from e2ekg.evals.run import _write_json
+    for i in range(300):
+        _write_json(target, {"writer": k, "i": i})
