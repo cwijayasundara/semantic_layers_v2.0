@@ -6,6 +6,7 @@ retries). `FakeClient` replays canned responses keyed the same way, so tests
 never touch the network."""
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -17,6 +18,10 @@ RETRIES = 2
 
 class LLMContractError(Exception):
     """The model's answer did not satisfy the closed schema (after retries)."""
+
+
+class LLMTransportError(Exception):
+    """The call itself failed (network, rate limit, server error) after the retries."""
 
 
 class LLMClient(Protocol):
@@ -43,20 +48,31 @@ class FireworksClient:
         key = request_key(self.model, system, user, schema)
         path = self.cache_dir / f"{key}.json"
         if path.exists():
-            return schema.model_validate_json(path.read_text())
+            try:
+                return schema.model_validate_json(path.read_text())
+            except (ValidationError, ValueError, OSError):
+                pass  # a torn or stale cache entry is a miss
         runnable = self._structured_chat(schema)
         last: Exception | None = None
+        contract = False
         for _ in range(1 + RETRIES):
             try:
                 out = runnable.invoke([("system", system), ("human", user)])
                 result = out if isinstance(out, schema) else schema.model_validate(out)
             except (ValidationError, ValueError, TypeError) as e:
-                last = e
+                last, contract = e, True
+                continue
+            except Exception as e:  # transport, rate limit, server error: retry, then report
+                last, contract = e, False
                 continue
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            path.write_text(result.model_dump_json())
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(result.model_dump_json())
+            tmp.replace(path)           # atomic: readers never see a half-written entry
             return result
-        raise LLMContractError(f"{schema.__name__}: {last}") from last
+        if contract:
+            raise LLMContractError(f"{schema.__name__}: {last}") from last
+        raise LLMTransportError(f"{schema.__name__}: {type(last).__name__}: {last}") from last
 
 
 class FakeClient:

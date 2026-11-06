@@ -225,3 +225,114 @@ def test_live_glm_labels_hero_channel(preprocessed_hero):
     assert (msgs["status"] == "ok").mean() >= 0.95
     assert claims.filter((pl.col("kind") == "mitigation")
                          & (pl.col("about_app_uri") == app_uri("title-metadata-svc"))).height >= 1
+
+
+def _frame(msgs):
+    """msgs: (ts, thread_ts, text) in one channel."""
+    rows = []
+    for i, (ts, thread, text) in enumerate(msgs):
+        rows.append({"raw_id": f"chat|slack/{CH}/m.jsonl|{i * 100}|9|{i:016x}",
+                     "source": "chat", "rel_path": f"slack/{CH}/m.jsonl", "ts_raw": ts,
+                     "channel": CH, "user": f"U{i}", "text": text, "subtype": None,
+                     "thread_ts": thread, "fields": "{}",
+                     "ts_utc": datetime.fromtimestamp(int(ts.split(".")[0]), UTC).replace(
+                         microsecond=int(ts.split(".")[1]))})
+    return pl.DataFrame(rows).with_columns(pl.col("ts_utc").dt.replace_time_zone("UTC"))
+
+
+def test_retraction_never_links_to_an_unrelated_hypothesis(resolver, scripted_llm):
+    """A walk-back about TMS must not retract the api-gateway hypothesis (or, worse, mark
+    the true-cause TMS hypothesis as retracted when it is about something else)."""
+    df = _frame([
+        ("2000.000001", None, "api-gateway deployed at 15:18, that lines up. can we roll it back?"),
+        ("2001.000001", None, "maybe the TMS fast property is the cause, could the floor be low?"),
+        ("2002.000001", None, "scratch that, I don't think it's row-ranker after all"),
+        ("2003.000001", None, "scratch that, I don't think it's title-metadata-svc after all"),
+    ])
+    _, claims = extract_chat(df, resolver, scripted_llm)
+    r = claims.filter(pl.col("kind") == "retraction").sort("claim_idx")
+    by_text = dict(zip(r["about_surface"], r["refers_to"], strict=True))
+    assert by_text["row-ranker"] is None                       # no row-ranker hypothesis
+    # title-metadata-svc: the TMS hypothesis is top-level and not in the retraction's thread
+    assert by_text["title-metadata-svc"] is None
+    assert set(r["link_method"]) <= {None}
+
+
+def test_model_reference_to_another_app_is_refused(resolver):
+    from e2ekg.preprocess.chat_extract import MessageExtraction
+    df = _frame([
+        ("3000.000001", None, "api-gateway deployed at 15:18, that lines up."),
+        ("3001.000001", None, "scratch that, I don't think it's title-metadata-svc after all"),
+    ])
+    lab = ThreadLabel(category="incident", sentiment="neutral", is_incident_related=True)
+    out = BatchExtraction(messages=[
+        MessageExtraction(label=lab, claims=[Claim(kind="hypothesis",
+                                                   about_surface=["api-gateway"],
+                                                   text_span=(0, 20), refers_to_claim_idx=None)]),
+        MessageExtraction(label=lab, claims=[Claim(kind="retraction",
+                                                   about_surface=["title-metadata-svc"],
+                                                   text_span=(0, 20), refers_to_claim_idx=0)])])
+    _, claims = extract_chat(df, resolver, FakeClient({FakeClient.ANY_KEY: out}))
+    r = claims.filter(pl.col("kind") == "retraction")
+    assert r["refers_to"][0] is None
+
+
+def test_same_app_links_inside_a_thread_and_records_method(resolver, scripted_llm):
+    df = _frame([
+        ("4000.000001", None, "api-gateway deployed at 15:18, that lines up. can we roll it back?"),
+        ("4001.000001", "4000.000001", "scratch that, I don't think it's api-gateway after all"),
+    ])
+    _, claims = extract_chat(df, resolver, scripted_llm)
+    r = claims.filter(pl.col("kind") == "retraction").row(0, named=True)
+    assert r["refers_to"] is not None and r["link_method"] in ("model", "thread_parent")
+
+
+def test_transport_errors_leave_unclassified_rows(slack_fixture, resolver):
+    class Flaky:
+        def structured(self, system, user, schema):
+            raise ConnectionError("429 rate limited")
+    msgs, claims, q = extract_chat_full(slack_fixture, resolver, Flaky())
+    assert msgs.height == slack_fixture.height and set(msgs["status"]) == {"unclassified"}
+    assert set(q["reason"]) == {"llm_error"} and claims.height == 0
+
+
+def test_fireworks_client_transport_error_and_atomic_cache(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from pydantic import BaseModel
+
+    from e2ekg.llm import FireworksClient, LLMTransportError
+
+    class Pick1(BaseModel):
+        choice: str
+
+    attempts = []
+
+    class Chat:
+        def __init__(self, model):
+            pass
+
+        def with_structured_output(self, schema):
+            class R:
+                def invoke(_, msgs):
+                    attempts.append(1)
+                    raise ConnectionError("503")
+            return R()
+    mod = types.ModuleType("langchain_fireworks")
+    mod.ChatFireworks = Chat
+    monkeypatch.setitem(sys.modules, "langchain_fireworks", mod)
+    c = FireworksClient(cache_dir=tmp_path)
+    with pytest.raises(LLMTransportError):
+        c.structured("s", "u", Pick1)
+    assert len(attempts) == 3 and list(tmp_path.glob("*")) == []     # nothing cached on failure
+    # a torn cache file is a miss, not a crash
+    from e2ekg.llm import MODEL_ID, request_key
+    (tmp_path / f"{request_key(MODEL_ID, 's', 'u', Pick1)}.json").write_text("{not json")
+
+    class Ok:
+        def invoke(self, msgs):
+            return Pick1(choice="x")
+    monkeypatch.setattr(FireworksClient, "_structured_chat", lambda self, schema: Ok())
+    assert c.structured("s", "u", Pick1).choice == "x"
+    assert not list(tmp_path.glob("*.tmp"))

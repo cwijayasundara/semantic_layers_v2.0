@@ -18,8 +18,11 @@ Choices:
   * `refers_to_claim_idx` is an index into the claims of that chunk, flattened in
     message order. A retraction's final `refers_to` is the global `claim_idx` of a
     hypothesis claim, from the model when that reference is valid, else the
-    hypothesis of the message it replies to, else the latest earlier hypothesis in
-    the channel about the same app, else null. Links are never invented beyond that.
+    hypothesis of the message it replies to, else an earlier hypothesis in its own thread,
+    else null. Every link needs the same resolved app on both claims (a retraction with no
+    app links only inside its thread), and `link_method` records which rule fired
+    (model, thread_parent, thread). A channel-wide "latest same-app hypothesis" rule was
+    dropped: it could mark the true-cause hypothesis as retracted.
   * A claim naming N surfaces becomes N rows (one app each) with the same kind and span.
   * `text_span` is character offsets into the message text. A span outside the text
     is replaced by the whole message.
@@ -35,7 +38,7 @@ from typing import Literal
 import polars as pl
 from pydantic import BaseModel, Field, ValidationError
 
-from e2ekg.llm import LLMClient, LLMContractError
+from e2ekg.llm import LLMClient, LLMContractError, LLMTransportError
 from e2ekg.preprocess.identity import Resolver
 
 CATEGORIES = ("incident", "question", "discussion", "decision")
@@ -101,6 +104,10 @@ def _call(llm: LLMClient, items: list[dict]) -> BatchExtraction:
         out = llm.structured(SYSTEM, _user_prompt(items), BatchExtraction)
     except ValidationError as e:
         raise LLMContractError(str(e)) from e
+    except LLMContractError:
+        raise
+    except Exception as e:  # transport, rate limit: the messages stay, unclassified
+        raise LLMTransportError(f"{type(e).__name__}: {e}") from e
     if len(out.messages) != len(items):
         raise LLMContractError(f"expected {len(items)} messages, got {len(out.messages)}")
     return out
@@ -138,14 +145,14 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
         try:
             out = _call(llm, items)
             groups = [(chunk, out)]
-        except LLMContractError:
+        except (LLMContractError, LLMTransportError):
             groups = []
             for n, i in enumerate(chunk):
                 single = [{**items[n], "i": 0, "thread_parent": None}]
                 try:
                     groups.append(([i], _call(llm, single)))
-                except LLMContractError as e:
-                    results[i], errors[i] = None, str(e)
+                except (LLMContractError, LLMTransportError) as e:
+                    results[i], errors[i] = None, f"{type(e).__name__}: {e}"
         for members, out in groups:
             gid += 1
             flat = 0
@@ -180,11 +187,20 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
                 flat_to_final[(batch_of[i], flat)].append(rec["idx"])
                 records.append(rec)
 
-    def prefer(cands: list[dict], rec: dict) -> dict | None:
-        if not cands:
-            return None
-        same = [c for c in cands if rec["uri"] and c["uri"] == rec["uri"]]
-        return (same or cands)[-1]
+    def root(i: int) -> tuple[str, str]:
+        r = rows[i]
+        return r["channel"], r["thread_ts"] or r["ts_raw"]
+
+    def same_thread(a: int, b: int) -> bool:
+        return root(a) == root(b)
+
+    def compatible(rec: dict, tgt: dict) -> bool:
+        """A retraction may only walk back a claim about the same app. If it names an app
+        the target must name the same one (an unresolved target cannot be verified, so it
+        is refused); if it names none, only a claim in its own thread qualifies."""
+        if rec["uri"]:
+            return tgt["uri"] == rec["uri"]
+        return same_thread(rec["i"], tgt["i"])
 
     hyp_by_msg: dict[int, list[dict]] = defaultdict(list)
     for rec in records:
@@ -194,27 +210,32 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
         if rec["kind"] != "retraction":
             continue
         row = rows[rec["i"]]
-        target = None
+        target, method = None, None
         if rec["ref"] is not None:                            # 1. the model's reference
             cands = [records[k] for k in flat_to_final.get((rec["batch"], rec["ref"]), [])
-                     if records[k]["kind"] == "hypothesis" and records[k]["i"] <= rec["i"]]
-            same = [c for c in cands if c["uri"] == rec["uri"] and rec["uri"]]
-            target = (same or cands or [None])[0]
+                     if records[k]["kind"] == "hypothesis" and records[k]["i"] <= rec["i"]
+                     and compatible(rec, records[k])]
+            if cands:
+                target, method = cands[0], "model"
         if target is None and row["thread_ts"]:               # 2. the message it replies to
             parent = by_ts.get((row["channel"], row["thread_ts"]))
             if parent is not None and parent in pos:
-                target = prefer(hyp_by_msg.get(pos[parent], []), rec)
-        if target is None and rec["uri"]:                     # 3. latest earlier, same app
-            earlier = [h for i in range(rec["i"] + 1) if rows[i]["channel"] == row["channel"]
-                       for h in hyp_by_msg.get(i, []) if h["uri"] == rec["uri"]
-                       and (h["i"] < rec["i"])]
-            target = earlier[-1] if earlier else None
+                cands = [h for h in hyp_by_msg.get(pos[parent], []) if compatible(rec, h)]
+                if cands:
+                    target, method = cands[-1], "thread_parent"
+        if target is None and rec["uri"]:                     # 3. earlier in its own thread
+            earlier = [h for i in range(rec["i"]) if same_thread(i, rec["i"])
+                       for h in hyp_by_msg.get(i, []) if compatible(rec, h)]
+            if earlier:
+                target, method = earlier[-1], "thread"
         rec["refers_to"] = target["idx"] if target else None
+        rec["link_method"] = method
 
     # -- frames --------------------------------------------------------------
     quarantine = [{"raw_id": rows[i]["raw_id"], "source": "chat",
                    "rel_path": rows[i]["rel_path"] if "rel_path" in rows[i] else None,
-                   "reason": "llm_contract", "excerpt": rows[i]["text"], "format": "slack",
+                   "reason": ("llm_contract" if errors[i].startswith("LLMContractError")
+                              else "llm_error"), "excerpt": rows[i]["text"], "format": "slack",
                    "detail": errors[i][:500]} for i in sorted(errors)]
     msgs = []
     for i, r in enumerate(rows):
@@ -235,10 +256,12 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
     claims_df = pl.DataFrame(
         [{"raw_id": rows[c["i"]]["raw_id"], "claim_idx": c["idx"], "kind": c["kind"],
           "about_app_uri": c["uri"], "about_surface": c["surface"], "span_start": c["s"],
-          "span_end": c["e"], "refers_to": c["refers_to"]} for c in records],
+          "span_end": c["e"], "refers_to": c["refers_to"],
+          "link_method": c.get("link_method")} for c in records],
         schema={"raw_id": pl.String, "claim_idx": pl.Int64, "kind": pl.String,
                 "about_app_uri": pl.String, "about_surface": pl.String,
-                "span_start": pl.Int64, "span_end": pl.Int64, "refers_to": pl.Int64})
+                "span_start": pl.Int64, "span_end": pl.Int64, "refers_to": pl.Int64,
+                "link_method": pl.String})
     q_df = pl.DataFrame(quarantine, schema={
         "raw_id": pl.String, "source": pl.String, "rel_path": pl.String, "reason": pl.String,
         "excerpt": pl.String, "format": pl.String, "detail": pl.String})
