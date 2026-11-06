@@ -6,7 +6,8 @@ import re
 import pyoxigraph as ox
 import pytest
 from rdflib import Dataset, Graph, Literal, URIRef
-from rdflib.namespace import RDF, XSD
+from rdflib import namespace as rdfns  # not `import XSD`: pytest probes module attrs
+from rdflib.namespace import RDF
 
 from e2ekg.graph.shacl import (
     CQ_DIR, ENRICHER_NAMES, LATER_STAGES, cq_question, cq_requires, expected, run_cq, validate,
@@ -170,10 +171,10 @@ def _fixture_triples():
     c2 = URIRef(change_uri("hero", "scaling", "0edf7fa4-6f6b"))
     return [
         (c1, RDF.type, OPS.Deployment), (c1, OPS.changedApp, app_uri("a")),
-        (c1, OPS.atTime, Literal("2026-10-14T15:00:00-07:00", datatype=XSD.dateTime)),
+        (c1, OPS.atTime, Literal("2026-10-14T15:00:00-07:00", datatype=rdfns.XSD.dateTime)),
         (c1, OPS["count"], Literal(3)),
         (c2, RDF.type, OPS.ScalingEvent), (c2, OPS.changedApp, app_uri("b")),
-        (c2, OPS.atTime, Literal("2026-10-14T22:30:00Z", datatype=XSD.dateTime)),
+        (c2, OPS.atTime, Literal("2026-10-14T22:30:00Z", datatype=rdfns.XSD.dateTime)),
     ]
 
 

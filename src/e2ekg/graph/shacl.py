@@ -47,10 +47,13 @@ _INTS = {str(XSD[t]) for t in ("integer", "int", "long", "short", "byte", "nonNe
                                 "positiveInteger", "unsignedInt", "unsignedLong")}
 _FLOATS = {str(XSD.decimal), str(XSD.double), str(XSD.float)}
 _DATETIME = str(XSD.dateTime)
+_BOOLEAN = str(XSD.boolean)
 
 
 def _ontology_files() -> list[Path]:
-    return [ONTOLOGY_DIR / "core.ttl", *(ONTOLOGY_DIR / "schemes" / f"{s}.ttl" for s in SCHEMES)]
+    """core.ttl, the SKOS schemes, then the approved extensions (ontology/extensions/)."""
+    return [ONTOLOGY_DIR / "core.ttl", *(ONTOLOGY_DIR / "schemes" / f"{s}.ttl" for s in SCHEMES),
+            *sorted((ONTOLOGY_DIR / "extensions").glob("*.ttl"))]
 
 
 @lru_cache(maxsize=1)
@@ -59,7 +62,7 @@ def _ontology_nt() -> str:
 
 
 def load_ontology() -> Graph:
-    """core.ttl plus every SKOS scheme, as a fresh rdflib Graph."""
+    """core.ttl, every SKOS scheme and the extensions, as a fresh rdflib Graph."""
     g = Graph()
     for p in _ontology_files():
         g.parse(p, format="turtle")
@@ -83,21 +86,31 @@ def _oxigraph_in(obj) -> ox.Store | None:
     return None
 
 
-def to_rdflib(obj) -> Graph:
-    """Flatten any supported graph input into one rdflib Graph (all named graphs merged)."""
+def to_rdflib(obj, into: Graph | None = None) -> Graph:
+    """Flatten any supported graph input into one rdflib Graph (all named graphs
+    merged), added to `into` when given."""
+    g = Graph() if into is None else into
     if isinstance(obj, Dataset):
-        g = Graph()
-        for s, p, o, _ in obj.quads((None, None, None, None)):
-            g.add((s, p, o))
+        for c in obj.graphs():
+            for t in c:
+                g.add(t)
         return g
     if isinstance(obj, Graph):
-        return obj
+        if into is None:
+            return obj
+        for t in obj:
+            g.add(t)
+        return g
     st = _oxigraph_in(obj)
     if st is None:
         raise TypeError(f"unsupported graph input {type(obj).__name__}")
-    ds = Dataset()
-    ds.parse(data=st.dump(format=ox.RdfFormat.N_QUADS).decode(), format="nquads")
-    return to_rdflib(ds)
+    for name in st.named_graphs():
+        g.parse(data=st.dump(format=ox.RdfFormat.N_TRIPLES, from_graph=name).decode(),
+                format="nt")
+    default = st.dump(format=ox.RdfFormat.N_TRIPLES, from_graph=ox.DefaultGraph()).decode()
+    if default.strip():
+        g.parse(data=default, format="nt")
+    return g
 
 
 def _to_oxigraph(obj) -> ox.Store:
@@ -124,9 +137,7 @@ def validate(graph_or_store) -> tuple[bool, str]:
     """SHACL-validate against ontology/shapes.ttl, with the ontology mixed in.
     The mix is done here on a copy: with pyshacl 0.40.2's own ont_graph
     mixing, the rdf:type rule flagged typed scheme nodes as untyped."""
-    data = load_ontology()
-    for t in to_rdflib(graph_or_store):
-        data.add(t)
+    data = to_rdflib(graph_or_store, into=load_ontology())
     conforms, _, text = pyshacl.validate(
         data, shacl_graph=load_shapes(), inference="none", advanced=True,
         abort_on_first=False, allow_warnings=False)
@@ -167,6 +178,8 @@ def _literal(lex: str, datatype: str | None) -> str:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    if datatype == _BOOLEAN:
+        return "true" if lex.strip() in ("true", "1") else "false"
     if datatype in _INTS:
         return str(int(lex))
     if datatype in _FLOATS:

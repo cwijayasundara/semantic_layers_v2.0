@@ -15,7 +15,8 @@ from decimal import Decimal
 
 import pytest
 from rdflib import Graph, Literal, URIRef
-from rdflib.namespace import PROV, RDF, RDFS, XSD
+from rdflib import namespace as rdfns  # not `import XSD`: pytest probes conftest attrs
+from rdflib.namespace import PROV, RDF, RDFS
 
 from e2ekg.graph.shacl import CQ_DIR
 from e2ekg.graph.uris import (
@@ -42,7 +43,7 @@ def load_derive():
 
 
 def _ts(dt) -> Literal:
-    return Literal(dt.isoformat().replace("+00:00", "Z"), datatype=XSD.dateTime)
+    return Literal(dt.isoformat().replace("+00:00", "Z"), datatype=rdfns.XSD.dateTime)
 
 
 class _B:
