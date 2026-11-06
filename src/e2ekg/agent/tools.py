@@ -27,6 +27,7 @@ import functools
 import hashlib
 import json
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -669,15 +670,21 @@ def _shapes() -> Graph:
     return load_shapes()
 
 
+# rdflib's SPARQL grammar, which pyshacl parses its shapes with, breaks when first used from
+# several threads at once, and the specialists record findings in parallel.
+_SHACL = threading.Lock()
+
+
 def _conforms(triples: list[tuple]) -> tuple[bool, str]:
-    data = Graph()
-    for prefix, ns in _ontology().namespaces():
-        data.bind(prefix, ns)
-    data += _ontology()
-    for t in triples:
-        data.add(t)
-    ok, _, text = pyshacl.validate(data, shacl_graph=_shapes(), inference="none", advanced=True,
-                                   abort_on_first=False, allow_warnings=False)
+    with _SHACL:
+        data = Graph()
+        for prefix, ns in _ontology().namespaces():
+            data.bind(prefix, ns)
+        data += _ontology()
+        for t in triples:
+            data.add(t)
+        ok, _, text = pyshacl.validate(data, shacl_graph=_shapes(), inference="none",
+                                       advanced=True, abort_on_first=False, allow_warnings=False)
     return bool(ok), str(text)
 
 

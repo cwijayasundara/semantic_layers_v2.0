@@ -3,7 +3,7 @@ import json
 import pytest
 from agent_helpers import call
 
-from e2ekg.agent.tools import CAP
+from e2ekg.agent.tools import CAP, make_tools
 from e2ekg.graph.uris import change_uri
 from e2ekg.scenario.hero import hero_scenario
 
@@ -283,3 +283,56 @@ def _raw_bytes(raw_root, raw_id: str) -> bytes:
     with open(raw_root / s.rel_path, "rb") as f:
         f.seek(s.offset)
         return f.read(s.length)
+
+
+_COLD_RACE = """
+import threading
+from rdflib import Literal, URIRef
+from rdflib.namespace import RDF, RDFS
+from e2ekg.agent import tools as T
+u = URIRef("https://kg.local/ops/finding/x/1")
+a = URIRef("https://kg.local/app/application/title-batch-loader")
+triples = [(u, RDF.type, T.OPS.Finding), (u, T.OPS.onApplication, a), (u, RDFS.comment, Literal("c")),
+           (u, T.OPS.confidence, T.dec(0.5)), (u, T.OPS.cites, a), (a, RDF.type, T.OPS.Application),
+           (a, T.OPS.inCatalog, Literal(True))]
+T._ontology(), T._shapes()
+gate, errors = threading.Barrier(8), []
+def go():
+    gate.wait()
+    try:
+        T._conforms(triples)
+    except Exception as e:
+        errors.append(repr(e))
+threads = [threading.Thread(target=go) for _ in range(8)]
+[t.start() for t in threads]
+[t.join() for t in threads]
+print(len(errors), errors[:1])
+"""
+
+
+def test_the_first_findings_validated_on_many_threads_at_once_all_pass():
+    """Specialists run in parallel. rdflib's SPARQL grammar (inside pyshacl) is not safe to
+    first use from several threads: live run 2 died on it. Fresh interpreters, because the
+    race is in its first use."""
+    import subprocess
+    import sys
+    for _ in range(3):
+        out = subprocess.run([sys.executable, "-c", _COLD_RACE], capture_output=True, text=True,
+                             check=True).stdout
+        assert out.startswith("0 "), out
+
+
+def test_findings_recorded_from_many_threads_at_once_all_land(live):
+    """Specialists run in parallel, so record_finding is called concurrently (live run 2
+    crashed in rdflib's SPARQL parser under that load)."""
+    from concurrent.futures import ThreadPoolExecutor
+    tools = make_tools(live.store, live.proc, "hero", "threads", llm=live.llm)
+    evidence = _spike_uri(live, "title-batch-loader")
+    with ThreadPoolExecutor(8) as pool:
+        outs = list(pool.map(lambda i: _record(tools, "TBL", [evidence], claim=f"claim {i}"),
+                             range(32)))
+    assert not [o for o in outs if not o.startswith("{")], outs[:3]
+    n = live.store.query("SELECT (COUNT(?f) AS ?n) WHERE { GRAPH "
+                         "<https://kg.local/graph/findings/hero/threads> { ?f a "
+                         "<https://kg.local/ops#Finding> } }")[0]["n"]
+    assert int(n) == 32
