@@ -46,12 +46,12 @@ def _app(uri: str) -> str:
 def test_enrichers_in_the_brief_order_named_as_the_cq_requires():
     names = [e.name for e in ENRICHERS]
     assert names == ["catalog", "topology", "changes", "metrics", "logs", "traces",
-                     "alerts_incidents", "chat", "history"]
+                     "alerts_incidents", "chat", "history", "correlation"]
     assert [n for n in ENRICHER_NAMES if n not in LATER_STAGES] == names
     assert [e.__name__ for e in ENRICHERS] == [
         "CatalogEnricher", "TopologyEnricher", "ChangesEnricher", "MetricAnomalyEnricher",
         "LogPatternEnricher", "TraceFingerprintEnricher", "AlertsIncidentsEnricher",
-        "ChatEnricher", "HistoryEnricher"]
+        "ChatEnricher", "HistoryEnricher", "CorrelationEnricher"]
     for e in ENRICHERS:
         assert e.reads, e.name
 

@@ -10,9 +10,7 @@ caller's default graph is not seen; harvest writes named graphs only).
 A CQ file is SPARQL whose first line is `# <natural-language question>`;
 its `# requires: <enricher>[, ...]` line names the enrichers that must have
 run for it to be answerable (names from ENRICHER_NAMES). A CQ requiring a
-LATER_STAGES enricher (`correlation`, Task 13) is gated until that stage
-exists. Its
-answer key sits beside it as `<name>.expected.json`:
+LATER_STAGES enricher is gated until that stage exists. Its answer key sits beside it as `<name>.expected.json`:
 `{"question", "vars", "rows": [{var: value}]}`. Values are encoded as
 `"<iri>"` for IRIs, the lexical form for literals (dateTimes normalized to
 UTC `...Z`, numbers canonicalized), and null for unbound. Results compare as
@@ -38,10 +36,10 @@ SCHEMES = ("error_category", "fault_kind", "change_kind", "severity", "message_c
 
 Row = tuple[tuple[str, str | None], ...]
 
-# Enricher names a CQ may require: Task 12's ENRICHERS, then later stages.
+# Enricher names a CQ may require: the ENRICHERS, then later stages (none now).
 ENRICHER_NAMES = ("catalog", "topology", "changes", "metrics", "logs", "traces",
                   "alerts_incidents", "chat", "history", "correlation")
-LATER_STAGES = frozenset({"correlation"})
+LATER_STAGES: frozenset[str] = frozenset()
 
 _INTS = {str(XSD[t]) for t in ("integer", "int", "long", "short", "byte", "nonNegativeInteger",
                                 "positiveInteger", "unsignedInt", "unsignedLong")}
