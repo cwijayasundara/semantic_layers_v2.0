@@ -28,3 +28,11 @@ def injections(p, injector_id: str) -> list[dict]:
 def injected_skew_host(p) -> str:
     (inj,) = injections(p, "log.host_skew")
     return inj["detail"]["host"]
+
+
+def derived(p, name: str) -> pl.DataFrame:
+    return pl.read_parquet(p.proc / "derived" / f"{name}.parquet")
+
+
+def app_uri(app: str) -> str:
+    return f"https://kg.local/app/application/{app}"

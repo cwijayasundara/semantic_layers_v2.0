@@ -181,7 +181,8 @@ class Resolver:
                 return done(app, "llm")
         return done(None, "unresolved")
 
-    def candidates(self, core: str, context: str, ranked: list[tuple[str, float, float]]) -> list[str]:
+    def candidates(self, core: str, context: str,
+                   ranked: list[tuple[str, float, float]]) -> list[str]:
         out: list[str] = []
         pools = [sorted(self._acronym.get(_squash(core), ())),
                  [i for i in self.ids if re.search(rf"(?<![\w-]){re.escape(i)}(?![\w-])",
@@ -197,7 +198,7 @@ class Resolver:
         cands = self.candidates(core, context, ranked)
         if not cands:
             return None
-        user = json.dumps({"surface": surface, "context": context, "candidates": cands + ["none"]})
+        user = json.dumps({"surface": surface, "context": context, "candidates": [*cands, "none"]})
         try:
             pick = self.llm.structured(SYSTEM, user, Pick)
         except Exception:  # contract error or transport failure: stay unresolved
@@ -210,7 +211,7 @@ def llm_user_prompt(resolver: Resolver, surface: str, context: str = "") -> str:
     core = list(resolver._strip_chain(surface.strip()))[-1]
     cands = resolver.candidates(core, context, resolver._fuzzy(core))
     return json.dumps({"surface": surface.strip(), "context": context,
-                       "candidates": cands + ["none"]})
+                       "candidates": [*cands, "none"]})
 
 
 # -- applying the resolver to the processed tables --------------------------
