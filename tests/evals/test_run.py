@@ -91,13 +91,13 @@ def engine_runs(eval_root):
             for sc in ("hero", "v-control") for arm in ev.ENGINE_ARMS}
 
 
-def test_engine_top_on_the_hero_reports_the_true_root_first(engine_runs, eval_root, uri_of):
+def test_engine_top_on_the_hero_reports_the_true_root_first(engine_runs, eval_root, eval_uri):
     run = engine_runs["hero", "engine_top"]
     assert run["alert"] == ALERT and run["seconds"] >= 0
     assert run["report"]["verdict"] == "root_cause_found"
-    assert run["report"]["hypotheses"][0]["root_cause_uri"] == uri_of("hero", "chg-cfg-0001")
+    assert run["report"]["hypotheses"][0]["root_cause_uri"] == eval_uri("hero", "chg-cfg-0001")
     chain = run["report"]["hypotheses"][0]["chain"]
-    assert chain[0] == uri_of("hero", "chg-cfg-0001") and len(chain) == len(set(chain)) > 3
+    assert chain[0] == eval_uri("hero", "chg-cfg-0001") and len(chain) == len(set(chain)) > 3
 
 
 def test_engine_top_on_the_control_abstains(engine_runs):
@@ -133,7 +133,7 @@ def answering(report: dict, seen: list):
     return policy
 
 
-def test_the_graph_arms_differ_by_the_evidence_tool(eval_root, uri_of):
+def test_the_graph_arms_differ_by_the_evidence_tool(eval_root, eval_uri):
     report = {"verdict": "inconclusive", "hypotheses": [], "summary": "stub"}
     offered = {}
     for arm in ("graph", "graph_no_evidence_tool"):
@@ -208,9 +208,9 @@ def agent_run(scenario: str, arm: str, run: int, root: str | None, *, evidence=(
 
 
 @pytest.fixture(scope="module")
-def scored(eval_root, uri_of, engine_runs):
-    cfg, dep = uri_of("hero", "chg-cfg-0001"), uri_of("hero", "chg-dep-0001")
-    bg = uri_of("v-control", "chg-bg-0001")
+def scored(eval_root, eval_uri, engine_runs):
+    cfg, dep = eval_uri("hero", "chg-cfg-0001"), eval_uri("hero", "chg-dep-0001")
+    bg = eval_uri("v-control", "chg-bg-0001")
     runs = [*engine_runs.values(),
             agent_run("hero", "graph", 0, cfg, evidence=[cfg]),
             agent_run("hero", "graph", 1, dep, evidence=[dep]),

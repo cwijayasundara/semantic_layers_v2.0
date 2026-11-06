@@ -140,3 +140,39 @@ def fixture_expected(harvested_hero, derive_module, tmp_path_factory):
         (d / f"{stem}.rq").write_text((CQ_DIR / f"{stem}.rq").read_text())
         (d / f"{stem}.expected.json").write_text(json.dumps(payload, indent=2) + "\n")
     return d
+
+
+@pytest.fixture(scope="session")
+def eval_root(tmp_path_factory, preprocessed, harvested):
+    """A data root laid out like data/ over the fixture hero and control: raw, an _answers
+    folder, processed, and the as-of graphs."""
+    import shutil
+    root = tmp_path_factory.mktemp("evalroot")
+    (root / "raw/_answers").mkdir(parents=True)
+    for name in ("hero", "v-control"):
+        pp, h = preprocessed(name), harvested(name, as_of=True)
+        shutil.copy(pp.answers / f"{name}.json", root / "raw/_answers" / f"{name}.json")
+        for link, target in {f"raw/{name}": pp.raw, f"processed/{name}": pp.proc,
+                             f"graph/{name}/as_of": h.out}.items():
+            (root / link).parent.mkdir(parents=True, exist_ok=True)
+            (root / link).symlink_to(target)
+    return root
+
+
+@pytest.fixture(scope="session")
+def eval_uri(eval_root):
+    """(scenario, scenario change id) -> the change's URI, mapped through the answer key."""
+    import json
+
+    from e2ekg.graph.uris import change_uri
+    from e2ekg.scenario.hero import hero_scenario
+    from e2ekg.scenario.variants import variant_scenarios
+    scenarios = {s.name: s for s in (hero_scenario(), *variant_scenarios())}
+
+    def get(scenario: str, cid: str) -> str:
+        answers = json.loads((eval_root / "raw/_answers" / f"{scenario}.json").read_text())
+        ext = {v: k for k, v in answers["external_ids"].items()}
+        kind = next(c.kind for c in scenarios[scenario].changes if c.id == cid)
+        return str(change_uri(scenario, kind, ext[cid]))
+    return get
+
