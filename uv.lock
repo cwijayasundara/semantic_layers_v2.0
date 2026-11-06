@@ -611,6 +611,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyoxigraph" },
     { name = "pyshacl" },
+    { name = "pyyaml" },
     { name = "rdflib" },
 ]
 
@@ -631,6 +632,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pyoxigraph", specifier = ">=0.5.13" },
     { name = "pyshacl", specifier = ">=0.40.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rdflib", specifier = ">=7.6.0" },
 ]
 
