@@ -302,7 +302,8 @@ def _add_rca(sub) -> None:
     p.add_argument("--alert", required=True, help="alert id (radar-...) or incident id")
     p.add_argument("--root", default="data", help="data root (<root>/graph/<scenario>/as_of)")
     p.add_argument("--evidence", default=None,
-                   help="directory behind the agent's /evidence/ (default <root>/agent/<sc>)")
+                   help="directory behind the agent's /evidence/, kept after the run "
+                        "(default: a temporary directory per run)")
     p.set_defaults(func=_cmd_rca)
 
 

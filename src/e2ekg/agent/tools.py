@@ -15,7 +15,7 @@ cutoff themselves:
 Every result is compact JSON of at most CAP characters. A list that does not fit loses its
 tail, and its last row says `"truncated": n`; one whose query hit its LIMIT says `"capped": 200`.
 A call that cannot be answered returns "error: <what to change>" instead of raising, so the
-model can correct itself. App arguments go through the `Resolver`, so "TMS" works when the
+model can correct itself. App arguments go through the `Resolver`, so a nickname works when the
 tools were made with an `llm`.
 
 Times are ISO 8601 (`2026-10-14T21:40Z`); a window is [start, end] on the stamp the node
@@ -42,7 +42,7 @@ from langchain_core.tools import BaseTool, tool
 from rdflib import Graph, Literal as RdfLiteral, URIRef
 from rdflib.namespace import RDF, RDFS
 
-from e2ekg.agent.refute import Call, Investigation
+from e2ekg.agent.evidence import Call, Case, Observed
 from e2ekg.agent.report import FindingIn
 from e2ekg.correlate.engine import CHANGE_TYPES, correlate
 from e2ekg.graph.enricher import dec, node
@@ -61,6 +61,8 @@ CAP = 4000
 LIMIT = 200
 LINE_MAX = 1500
 MAX_CHAINS = 5
+EVIDENCE_CAP = 4 * CAP     # facts for several named changes in one call
+BEFORE_SHOWN, SAME_SHOWN = 3, 5
 CLAIM_KINDS = ("observation", "hypothesis", "mitigation", "root_cause", "retraction")
 
 OPS, PROV = NS["ops"], NS["prov"]
@@ -92,6 +94,7 @@ class Env:
     resolver: Resolver
     as_of: datetime
     symptom: str | None
+    gate: bool = True
     chains: dict[str, str] = field(default_factory=dict)
 
 
@@ -111,8 +114,9 @@ def _dump(obj) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
-def _fit(rows: list, capped: bool = False, head: dict | None = None, key: str = "rows") -> str:
-    """The longest prefix of `rows` whose JSON is at most CAP characters. What was left out is
+def _fit(rows: list, capped: bool = False, head: dict | None = None, key: str = "rows",
+         cap: int = CAP) -> str:
+    """The longest prefix of `rows` whose JSON is at most `cap` characters. What was left out is
     noted on the last row kept ({"truncated": n} rows, {"capped": 200} when the query hit its
     LIMIT), so every element of the list stays a row. `head` makes the result an object
     {**head, key: rows, notes}."""
@@ -129,12 +133,12 @@ def _fit(rows: list, capped: bool = False, head: dict | None = None, key: str = 
             shown[-1:] = [{**shown[-1], **notes}] if shown else [notes]
         return _dump(shown)
 
-    if len(whole := render(len(rows))) <= CAP:
+    if len(whole := render(len(rows))) <= cap:
         return whole
     lo, hi = 0, len(rows)
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        lo, hi = (mid, hi) if len(render(mid)) <= CAP else (lo, mid - 1)
+        lo, hi = (mid, hi) if len(render(mid)) <= cap else (lo, mid - 1)
     return render(lo)
 
 
@@ -450,7 +454,7 @@ def causal_chains(env: Env, symptom: str) -> str:
             raise ToolError(f"{symptom} is not an incident or alert in the graph before the "
                             "cutoff; find_symptom names the live one")
         signals, edges, _ = chain_inputs(env.store, symptom)
-        chains = correlate(signals, edges, symptom)[:MAX_CHAINS]
+        chains = correlate(signals, edges, symptom, gate=env.gate)[:MAX_CHAINS]
         env.chains[symptom] = _fit([
             {"conf": round(c.confidence, 3),
              "links": [[s.type, s.app, _z(s.at_utc), s.uri] for s in c.links]} for c in chains])
@@ -458,45 +462,70 @@ def causal_chains(env: Env, symptom: str) -> str:
 
 
 @_guarded
-def refutation_check(env: Env, alert_id: str, candidate_uris: list[str]) -> str:
+def candidate_evidence(env: Env, alert_id: str, candidate_uris: list[str]) -> str:
+    asked = list(dict.fromkeys(u.strip() for u in candidate_uris if u.strip()))
+    if not asked:
+        raise ToolError("name the change URIs to examine (from changes_in_window, the roots of "
+                        "causal_chains, or the findings); this tool proposes none")
     found = find_symptom(env, alert_id)
     if found.startswith("error: "):
         raise ToolError(found.removeprefix("error: "))
     sym = json.loads(found)
     signals, edges, _ = chain_inputs(env.store, sym["symptom_uri"])
-    kinds = {_app_of(r["a"]): r["k"]
-             for r in env.store.query(PFX + "SELECT ?a ?k WHERE { ?a ops:appKind ?k }")}
-    calls = [Call(_app_of(r["caller"]), _app_of(r["callee"]), datetime.fromisoformat(r["t"]))
-             for r in env.store.query(PFX + """SELECT ?caller ?callee ?t ?type WHERE {
+    calls = [Call(_app_of(r["caller"]), _app_of(r["callee"]), datetime.fromisoformat(r["t"]),
+                  r["s"])
+             for r in _select(env, """SELECT ?s ?caller ?callee ?t ?type WHERE {
                  ?s a ops:TraceEdgeFingerprint ; ops:signalType ?type ; ops:atTime ?t ;
                     ops:onApplication ?callee ; trc:caller ?caller }""")
              if _tail(r["type"]) in ("slow_trace", "failed_trace")]
-    filed = (sym["incident"] or {}).get("affects", [])
-    inv = Investigation(signals, edges, calls, kinds, sym["alert"]["uri"], filed,
-                        correlate(signals, edges, sym["symptom_uri"]))
-    changes = {s.uri for s in signals if s.type in CHANGE_TYPES}
-    asked = [u.strip() for u in candidate_uris]
-    verdicts = inv.judge(inv.candidates(u for u in asked if u in changes))
-    change_kind = {r["c"]: _tail(r["k"]) for r in _select(env, f"""SELECT ?c ?k WHERE {{
-        VALUES ?c {{ {' '.join(f'<{v.change.uri}>' for v in verdicts)} }}
-        ?c ops:changeKind ?k }}""")} if verdicts else {}
+    observed = [Observed(_app_of(r["caller"]), _app_of(r["callee"]),
+                         datetime.fromisoformat(r["a"]), datetime.fromisoformat(r["b"]))
+                for r in _select(env, """SELECT ?caller ?callee ?a ?b WHERE {
+                    ?e a trc:TraceEdge ; trc:caller ?caller ; ops:onApplication ?callee ;
+                       ops:windowStart ?a ; ops:windowEnd ?b }""")]
+    case = Case(signals, edges, calls, observed, sym["alert"]["uri"], sym["symptom_uri"],
+                gate=env.gate)
+    changes = {s.uri: s for s in case.signals if s.type in CHANGE_TYPES}
+    named = [changes[u] for u in asked if u in changes]
+    shown = {s.uri for f in map(case.facts, named) for s in (f.change, *f.same_app_changes)}
+    kind = {r["c"]: _tail(r["k"]) for r in _select(env, f"""SELECT ?c ?k WHERE {{
+        VALUES ?c {{ {' '.join(f'<{u}>' for u in shown)} }} ?c ops:changeKind ?k }}""")} \
+        if shown else {}
+
+    def first(signals, extra=lambda s: {}) -> dict:
+        return {"n": len(signals), "first": [
+            {"uri": s.uri, "type": s.type, "app": s.app, "at": _z(s.at_utc), **extra(s)}
+            for s in signals[:BEFORE_SHOWN]]}
+
     rows = []
-    for v in verdicts:
-        c = v.change
-        row = {"uri": c.uri, "kind": change_kind.get(c.uri, c.type), "app": c.app,
-               "at": _z(c.at_utc), "survives": v.survives,
-               "refuted_by": [f"{k.name}: {k.why}" for k in v.checks if not k.ok]}
-        if v.survives:
-            row["supported_by"] = [f"{k.name}: {k.why}" for k in v.checks]
-        rows.append({**row, "chain_conf": v.chain_conf})
-    rows += [{"uri": u, "error": "not a change in the graph before the cutoff"}
-             for u in asked if u not in changes]
+    for u in asked:
+        if u not in changes:
+            rows.append({"uri": u, "error": "not a change in the graph before the cutoff"})
+            continue
+        f = case.facts(changes[u])
+        c, roots = f.change, {b.signal: list(b.roots) for b in f.rooted_before}
+        rows.append({
+            "uri": c.uri, "kind": kind.get(c.uri, c.type), "app": c.app, "at": _z(c.at_utc),
+            "minutes_before_onset": f.minutes_before_onset,
+            "minutes_before_alert": f.minutes_before_alert,
+            "call_path": None if f.call_path is None else [
+                {"caller": h.caller, "callee": h.callee, "status": h.status,
+                 **({"at": _z(h.signal.at), "uri": h.signal.uri} if h.signal else {})}
+                for h in f.call_path],
+            "rooted_before": first([b.signal for b in f.rooted_before],
+                                   lambda s: {"rooted_in": roots[s]}),
+            "unrooted_before": first(list(f.unrooted_before)),
+            "same_app_changes": {"n": len(f.same_app_changes), "first": [
+                {"uri": s.uri, "kind": kind.get(s.uri, s.type), "at": _z(s.at_utc)}
+                for s in f.same_app_changes[:SAME_SHOWN]]},
+            "engine_chain": f.chain and {"conf": round(f.chain.confidence, 3),
+                                         "root": f.chain.links[0].uri}})
+    onset = case.onset
     head = {"symptom": {
-        "alert": inv.alert.uri, "app": inv.alert.app, "alert_at": _z(inv.alert.at_utc),
-        "onset": _z(inv.onset.at_utc), "onset_uri": inv.onset.uri, "clients": list(inv.clients),
-        "filed_against": list(inv.filed_against),
-        "filed_in_closure": all(inv.depends(inv.alert.app, a) for a in filed) if filed else None}}
-    return _fit(rows, head=head, key="candidates")
+        "alert": case.alert.uri, "app": case.alert.app, "alert_at": _z(case.alert.at_utc),
+        "onset": onset and {"uri": onset.uri, "type": onset.type, "at": _z(onset.at_utc)},
+        "filed_against": (sym["incident"] or {}).get("affects", [])}}
+    return _fit(rows, head=head, key="candidates", cap=EVIDENCE_CAP)
 
 
 # --- sparql ------------------------------------------------------------------------------
@@ -741,11 +770,13 @@ def read_findings(env: Env, app: str | None) -> str:
 # --- the toolset -------------------------------------------------------------------------
 
 def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *, llm=None,
-               as_of: datetime | None = None, raw_root: Path | None = None) -> dict[str, BaseTool]:
+               as_of: datetime | None = None, raw_root: Path | None = None,
+               gate: bool = True) -> dict[str, BaseTool]:
     """The agent's tools over `store`, an as-of store. `as_of` is the cutoff `store` was
     harvested at (default: the live incident's, `asof.live_cutoff`); `raw_evidence` enforces
     it. `raw_root` defaults to the raw tree beside `proc_root`. `llm` lets the Resolver read
-    nicknames such as "TMS"."""
+    nicknames. `gate` is the correlation engine's gate for every tool that correlates
+    (causal_chains, candidate_evidence; R53's ablations)."""
     if not _SPECIALIST.fullmatch(specialist):
         raise ValueError(f"specialist {specialist!r}: letters, digits, '_' and '-' only")
     proc = Path(proc_root)
@@ -753,7 +784,7 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
     env = Env(store=store, proc=proc, raw=Path(raw_root) if raw_root else _raw_root(proc),
               scenario=scenario, specialist=specialist, resolver=resolver,
               as_of=as_of or asof.live_cutoff(proc).as_of,
-              symptom=symptom_uri(scenario, asof.live_symptom(proc)))
+              symptom=symptom_uri(scenario, asof.live_symptom(proc)), gate=gate)
 
     @tool("find_symptom", parse_docstring=True)
     def find_symptom_tool(alert_id: str) -> str:
@@ -763,7 +794,7 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         was opened before the cutoff, else the alert.
 
         Args:
-            alert_id: Radar alert id such as radar-09000, or an incident id such as INC-5377.
+            alert_id: Radar alert id such as radar-01234, or an incident id such as INC-1234.
         """
         return find_symptom(env, alert_id)
 
@@ -774,7 +805,7 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         effect travels up the callers.
 
         Args:
-            app: Application id or a name for it (e.g. TMS).
+            app: Application id or a name people use for it (an alias or nickname).
             direction: down for dependencies, up for callers.
         """
         return dependency_closure(env, app, direction)
@@ -863,7 +894,7 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         Chat holds hypotheses and observations, so weigh them against telemetry.
 
         Args:
-            channel: Slack channel such as inc-5377-homepage-ttr, or an incident id.
+            channel: Slack channel such as inc-1234-checkout-errors, or an incident id.
             kinds: Claim kinds to keep (observation, hypothesis, mitigation, root_cause,
                 retraction); empty keeps all.
         """
@@ -880,27 +911,31 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
         """
         return causal_chains(env, symptom_uri)
 
-    @tool("refutation_check", parse_docstring=True)
-    def refutation_check_tool(alert_id: str, candidate_uris: list[str]) -> str:
-        """Test candidate root-cause changes against the graph. The symptom is the alert's
-        application degrading, from the first telemetry of its episode (onset) to the alert.
-        Candidates are every change (autoscaling aside) in the hour before the onset on an app
-        the alert app depends on, a client that reaches it, or an app the incident was filed
-        against, plus the changes you name. Each must pass: closure (the alert app depends on its app),
-        timing (it landed before the onset, skew-corrected time), clients (every client of
-        the alert app depends on its app), already_degrading (neither its app nor anything
-        it depends on was degrading before it landed), origin (not autoscaling, not a commit:
-        its deployment is the change), propagation (slow or failed calls, from it on, lead
-        from its app, or a datastore's or cache's callers, up to the alert app). Returns
-        {symptom{alert,app,alert_at,onset,onset_uri,clients,filed_against,filed_in_closure},
-        candidates[{uri,kind,app,at,survives,refuted_by,supported_by,chain_conf}]},
-        survivors first.
+    @tool("candidate_evidence", parse_docstring=True)
+    def candidate_evidence_tool(alert_id: str, candidate_uris: list[str]) -> str:
+        """Facts about the candidate root-cause changes you name, in the order you name them.
+        It examines only what you name and draws no conclusion. Returns
+        {symptom{alert,app,alert_at,onset{uri,type,at}|null,filed_against},
+        candidates[{uri,kind,app,at,minutes_before_onset,minutes_before_alert,call_path,
+        rooted_before,unrooted_before,same_app_changes,engine_chain}]}.
+        onset: the earliest telemetry on the alert's app that some change's effects reach
+        (null when none does). minutes_before_*: signed minutes from the change to the onset
+        or the alert; negative means it landed after. call_path: null when the alert's app
+        does not depend on the change's app, [] when it is that app, else the hops
+        [{caller,callee,status,at,uri}] from the alert's app down to it; status degraded (a
+        slow or failed edge began on it once the change landed), not_degraded (spans seen,
+        none degraded), or unknown (no spans seen on that call). rooted_before /
+        unrooted_before {n,first}: telemetry on the change's app or what it depends on in
+        the 10 minutes before it landed, split by whether an earlier change's effects reach
+        it (rooted_in names those changes). same_app_changes {n,first}: other changes to its
+        app from an hour before it to the alert, earliest first. engine_chain {conf,root}|null: the correlation
+        engine's best chain through it. Times are skew-corrected UTC.
 
         Args:
             alert_id: The alert (radar-...) or incident (INC-...) under investigation.
-            candidate_uris: Change URIs to test besides the ones found automatically.
+            candidate_uris: The change URIs to examine (at least one).
         """
-        return refutation_check(env, alert_id, candidate_uris)
+        return candidate_evidence(env, alert_id, candidate_uris)
 
     @tool("raw_evidence", parse_docstring=True)
     def raw_evidence_tool(uri_or_selector: str, limit: int = 20) -> str:
@@ -953,7 +988,7 @@ def make_tools(store: Store, proc_root: Path, scenario: str, specialist: str, *,
              "anomalies_in_window": anomalies_in_window_tool, "log_spikes": log_spikes_tool,
              "trace_edges": trace_edges_tool, "alerts_incidents": alerts_incidents_tool,
              "similar_incidents": similar_incidents_tool, "chat_claims": chat_claims_tool,
-             "causal_chains": causal_chains_tool, "refutation_check": refutation_check_tool,
+             "causal_chains": causal_chains_tool, "candidate_evidence": candidate_evidence_tool,
              "raw_evidence": raw_evidence_tool,
              "sparql_select": sparql_select_tool, "record_finding": record_finding_tool,
              "read_findings": read_findings_tool}

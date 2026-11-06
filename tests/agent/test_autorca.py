@@ -1,9 +1,10 @@
 """The AutoRCA agent: seven specialists with their own tools and prompts, a commander that
-refutes before it concludes, and no way to reach the full store or the answer key.
+weighs facts and decides, and no way to reach the full store or the answer key.
 
 Unit tests drive the real compiled agent with a scripted tool-calling model: one policy
-plays the commander and every specialist, and the report it returns is transcribed from the
-real tools' outputs, so what is asserted is what the graph and the refutation check say."""
+plays the commander and every specialist. The scripted commander reasons the way the prompt
+teaches, over the facts candidate_evidence returns for the candidates it names, because no
+tool hands it a verdict to copy."""
 import hashlib
 import json
 import os
@@ -15,14 +16,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from agent_helpers import fake_tool_model, subagent_names, tool_names
+from agent_helpers import copy_store, fake_tool_model, subagent_names, tool_names
+from deepagents import create_deep_agent
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from e2ekg.agent import autorca
-from e2ekg.agent.autorca import build_autorca, run_rca
-from e2ekg.agent.report import RCAReport
-from e2ekg.agent.specialists import PROMPTS, SPECIALISTS, build_specialists
+from e2ekg.agent.autorca import FailedRCA, build_autorca, harnessed, run_rca
+from e2ekg.agent.report import FindingIn, RCAReport
+from e2ekg.agent.specialists import DESCRIPTIONS, PROMPTS, SPECIALISTS, build_specialists
+from e2ekg.agent.tools import make_tools
 from e2ekg.graph import store as store_mod
 from e2ekg.graph.uris import change_uri
 from e2ekg.scenario.hero import hero_scenario
@@ -33,7 +37,7 @@ ALERT, ALERT_APP = "radar-09000", "homepage-graphql"
 WINDOW = {"start": "2026-10-14T21:00Z", "end": "2026-10-14T23:00Z"}
 GRAPH_TOOLS = {"find_symptom", "dependency_closure", "changes_in_window", "anomalies_in_window",
                "log_spikes", "trace_edges", "alerts_incidents", "similar_incidents",
-               "chat_claims", "causal_chains", "refutation_check", "raw_evidence",
+               "chat_claims", "causal_chains", "candidate_evidence", "raw_evidence",
                "sparql_select", "record_finding", "read_findings"}
 FIRST_CALL = {"topology": ("trace_edges", WINDOW | {"apps": []}),
               "change": ("changes_in_window", WINDOW | {"apps": []}),
@@ -51,6 +55,10 @@ def _call(name: str, args: dict, i: int = 0) -> dict:
 def _last(messages, name: str) -> str:
     return next(m.content for m in reversed(messages)
                 if isinstance(m, ToolMessage) and m.name == name)
+
+
+def _all(messages, name: str) -> list[str]:
+    return [m.content for m in messages if isinstance(m, ToolMessage) and m.name == name]
 
 
 def _specialist(bound: frozenset[str]) -> str:
@@ -82,24 +90,46 @@ def commander(messages, n: int) -> AIMessage:
             for i, s in enumerate(SPECIALISTS)])
     if n == 2:
         symptom = json.loads(_last(messages, "find_symptom"))["symptom_uri"]
-        return AIMessage("", tool_calls=[_call("read_findings", {}),
-                                         _call("causal_chains", {"symptom_uri": symptom})])
+        return AIMessage("", tool_calls=[
+            _call("read_findings", {}), _call("causal_chains", {"symptom_uri": symptom}),
+            _call("changes_in_window", {"apps": [], "start": "2026-10-14T21:00Z",
+                                        "end": "2026-10-14T22:30Z"})])
     if n == 3:
         roots = [c["links"][0][3] for c in json.loads(_last(messages, "causal_chains"))]
         cited = [u for f in json.loads(_last(messages, "read_findings")) for u in f["cites"]
                  if "/chg/" in u]
-        return AIMessage("", tool_calls=[_call("refutation_check", {
-            "alert_id": ALERT, "candidate_uris": sorted({*roots, *cited})})])
-    checked = json.loads(_last(messages, "refutation_check"))["candidates"]
-    alive = [c for c in checked if c.get("survives")]
-    refuted = [f"{c['uri']} refuted: {c['refuted_by'][0]}" for c in checked
-               if c.get("survives") is False]
-    report = {"verdict": "root_cause_found" if alive else "inconclusive",
+        seen = [c["uri"] for c in json.loads(_last(messages, "changes_in_window")) if "uri" in c]
+        named = sorted({*roots, *cited, *seen})
+        return AIMessage("", tool_calls=[
+            _call("candidate_evidence", {"alert_id": ALERT, "candidate_uris": named[i:i + 6]}, i)
+            for i in range(0, len(named), 6)])
+    facts = [c for out in _all(messages, "candidate_evidence")
+             for c in json.loads(out)["candidates"] if "error" not in c]
+    judged = [(c, ruled_out(c)) for c in facts]
+    alive = sorted((c for c, why in judged if why is None), key=lambda c: c["at"])
+    refuted = [f"{c['uri']} refuted: {why}" for c, why in judged if why]
+    report = {"verdict": "root_cause_found" if len(alive) == 1 else "inconclusive",
               "hypotheses": [{"root_cause_uri": c["uri"], "chain": [c["uri"]],
-                              "confidence": c["chain_conf"] or 0.5, "evidence": [c["uri"]],
+                              "confidence": 0.8, "evidence": [c["uri"]],
                               "refuted_alternatives": refuted} for c in alive],
               "summary": "scripted"}
     return AIMessage("", tool_calls=[_call("RCAReport", report)])
+
+
+def ruled_out(c: dict) -> str | None:
+    """The scripted commander's reading of one candidate's facts: the step 6 method."""
+    if c["call_path"] is None:
+        return f"{ALERT_APP} does not depend on {c['app']}"
+    if c["minutes_before_onset"] is None or c["minutes_before_onset"] < 0:
+        return "landed after the degradation began"
+    if any(h["status"] == "not_degraded" for h in c["call_path"]):
+        return "a call on its path stayed healthy"
+    if c["rooted_before"]["n"]:
+        return f"landed into degradation {c['rooted_before']['first'][0]['rooted_in'][0]} explains"
+    earlier = [x for x in c["same_app_changes"]["first"] if x["at"] < c["at"]]
+    if c["kind"] == "scaling" and earlier:
+        return f"a reaction to {earlier[0]['uri']}"
+    return None
 
 
 def specialist(name: str, messages, n: int) -> AIMessage:
@@ -301,14 +331,30 @@ def _answer_key_terms() -> set[str]:
     return terms
 
 
-def test_prompts_name_no_app_change_or_answer_from_any_scenario(harvested_hero_as_of):
+def _model_facing_text(h, scripted_llm) -> dict[str, str]:
+    """Everything the models read before any tool runs: every prompt, every tool's schema
+    (its description and its arguments' descriptions), every specialist's description."""
+    prompts = {p.name: p.read_text() for p in PROMPTS.glob("*.md")}
+    assert set(prompts) == {f"{n}.md" for n in [*SPECIALISTS, "autorca", "candidate_evidence"]}
+    tools = make_tools(copy_store(h.store), h.proc, "hero", "leak", llm=scripted_llm)
+    return {**prompts,
+            **{f"tool:{n}": json.dumps(convert_to_openai_tool(t)) for n, t in tools.items()},
+            **{f"description:{n}": d for n, d in DESCRIPTIONS.items()}}
+
+
+def test_nothing_the_models_read_names_an_app_change_or_answer_from_any_scenario(
+        harvested_hero_as_of, scripted_llm):
     answers = json.loads((harvested_hero_as_of.answers / "hero.json").read_text())
     terms = _answer_key_terms() | set(answers["external_ids"])
-    prompts = {p.name: p.read_text() for p in PROMPTS.glob("*.md")}
-    assert set(prompts) == {f"{n}.md" for n in [*SPECIALISTS, "autorca"]}
-    hits = {(name, t) for name, text in prompts.items() for t in terms
+    texts = _model_facing_text(harvested_hero_as_of, scripted_llm)
+    hits = {(name, t) for name, text in texts.items() for t in terms
             if re.search(rf"(?<![\w-]){re.escape(t)}(?![\w-])", text, re.I)}
     assert not hits
+
+
+def test_the_leak_grep_reads_tool_argument_descriptions(harvested_hero_as_of, scripted_llm):
+    texts = _model_facing_text(harvested_hero_as_of, scripted_llm)
+    assert "Application id or a name people use for it" in texts["tool:dependency_closure"]
 
 
 def test_the_leak_grep_would_catch_an_app_name():
@@ -320,6 +366,141 @@ def test_the_leak_grep_would_catch_an_app_name():
 def test_every_specialist_prompt_ends_with_the_reporting_rule(name):
     assert (PROMPTS / f"{name}.md").read_text().rstrip().endswith(
         "Report only through record_finding. Return one line naming the finding URIs.")
+
+
+VERDICT_KEYS = {"survives", "refuted_by", "supported_by", "verdict", "refuted", "passes",
+                "ok", "rank", "score", "checks", "conclusion"}
+
+
+def _keys(obj) -> set[str]:
+    if isinstance(obj, dict):
+        return set(obj) | set().union(*(_keys(v) for v in obj.values()))
+    if isinstance(obj, list):
+        return set().union(*(_keys(v) for v in obj))
+    return set()
+
+
+def test_no_tool_the_agents_called_returned_a_verdict_or_a_ranking(scripted_run):
+    outputs = []
+    for t in scripted_run["transcript"]:
+        try:
+            outputs.append(json.loads(t))
+        except ValueError:
+            continue
+    assert any("candidates" in o for o in outputs if isinstance(o, dict))
+    assert not set().union(*map(_keys, outputs)) & VERDICT_KEYS
+
+
+def test_a_relay_commander_has_no_candidate_list_to_copy(harvested_hero_as_of, scripted_llm,
+                                                         tmp_path):
+    h = harvested_hero_as_of
+    transcript = []
+    relay = prober(transcript, [{"name": "candidate_evidence",
+                                 "args": {"alert_id": ALERT, "candidate_uris": []}}])
+    agent = build_autorca(h.store, h.proc, "hero", llm=scripted_llm, evidence_root=tmp_path,
+                          model=fake_tool_model(relay))
+    agent.invoke({"messages": [HumanMessage("relay")]})
+    assert transcript[0].startswith("error")
+
+
+def _offered(with_evidence_tool: bool, h, scripted_llm, tmp_path):
+    seen = {}
+
+    def policy(messages, bound):
+        if "task" in bound:
+            seen["tools"] = bound
+            seen["system"] = next(m.content for m in messages if isinstance(m, SystemMessage))
+        return AIMessage("", tool_calls=[_call("RCAReport", {
+            "verdict": "inconclusive", "hypotheses": [], "summary": "probe"})])
+    agent = build_autorca(h.store, h.proc, "hero", llm=scripted_llm, evidence_root=tmp_path,
+                          model=fake_tool_model(policy), with_evidence_tool=with_evidence_tool)
+    agent.invoke({"messages": [HumanMessage("probe")]})
+    return seen
+
+
+def test_the_evidence_tool_and_its_prompt_come_and_go_together(harvested_hero_as_of,
+                                                               scripted_llm, tmp_path):
+    h = harvested_hero_as_of
+    on, off = (_offered(w, h, scripted_llm, tmp_path) for w in (True, False))
+    assert on["tools"] & GRAPH_TOOLS == set(autorca.COMMANDER_TOOLS)
+    assert off["tools"] & GRAPH_TOOLS == set(autorca.COMMANDER_TOOLS) - {"candidate_evidence"}
+    assert "candidate_evidence" in on["system"] and "candidate_evidence" not in off["system"]
+
+
+def test_an_agent_built_without_specialists_gets_no_extra_subagent_and_no_shell():
+    offered = {}
+
+    def policy(messages, bound):
+        offered["tools"] = bound
+        return AIMessage("done")
+    agent = create_deep_agent(model=harnessed(fake_tool_model(policy)), tools=[],
+                              system_prompt="raw only")
+    agent.invoke({"messages": [HumanMessage("go")]})
+    assert "execute" not in offered["tools"] and "task" not in offered["tools"]
+    assert {"ls", "read_file"} <= offered["tools"]
+
+
+def _writer(listing: list):
+    def policy(messages, bound):
+        n = sum(isinstance(m, AIMessage) for m in messages)
+        if n == 0:
+            return AIMessage("", tool_calls=[_call("ls", {"path": "/evidence/"})])
+        if n == 1:
+            listing.append(_last(messages, "ls"))
+            return AIMessage("", tool_calls=[_call("write_file", {
+                "file_path": "/evidence/note.md", "content": "suspect everything"})])
+        return AIMessage("", tool_calls=[_call("RCAReport", {
+            "verdict": "inconclusive", "hypotheses": [], "summary": "noted"})])
+    return policy
+
+
+def test_each_run_gets_a_fresh_evidence_directory_unless_one_is_named(hero_root, scripted_llm,
+                                                                      tmp_path):
+    fresh, kept = [], []
+    for _ in range(2):
+        run_rca(ALERT, "hero", root=hero_root, llm=scripted_llm,
+                model=fake_tool_model(_writer(fresh)))
+    assert not any("note.md" in x for x in fresh)
+    for _ in range(2):
+        run_rca(ALERT, "hero", root=hero_root, llm=scripted_llm, evidence_root=tmp_path,
+                model=fake_tool_model(_writer(kept)))
+    assert "note.md" not in kept[0] and "note.md" in kept[1]
+    assert (tmp_path / "note.md").read_text() == "suspect everything"
+
+
+def test_a_run_that_hits_the_recursion_limit_returns_a_failed_report(hero_root, scripted_llm,
+                                                                     monkeypatch):
+    monkeypatch.setattr(autorca, "RECURSION_LIMIT", 6)
+    forever = fake_tool_model(lambda messages, bound: AIMessage(
+        "", tool_calls=[_call("find_symptom", {"alert_id": ALERT},
+                              sum(isinstance(m, AIMessage) for m in messages))]))
+    r = run_rca(ALERT, "hero", root=hero_root, llm=scripted_llm, model=forever)
+    assert isinstance(r, FailedRCA) and r.verdict == "inconclusive" and not r.hypotheses
+    assert "GraphRecursionError" in r.failure
+
+
+def test_a_run_that_ends_without_a_report_returns_a_failed_report(hero_root, scripted_llm):
+    r = run_rca(ALERT, "hero", root=hero_root, llm=scripted_llm,
+                model=fake_tool_model(lambda messages, bound: AIMessage("I give up")))
+    assert isinstance(r, FailedRCA) and r.verdict == "inconclusive"
+    assert "structured response" in r.failure
+
+
+def test_findings_from_an_earlier_run_never_reach_a_new_agent(harvested_hero_as_of,
+                                                              scripted_llm, tmp_path):
+    h = harvested_hero_as_of
+    store = copy_store(h.store)
+    alert = f"https://kg.local/alrt/alert/hero/{ALERT}"
+    old = make_tools(store, h.proc, "hero", "earlier", llm=scripted_llm)["record_finding"]
+    assert "uri" in json.loads(old.invoke({"f": FindingIn(
+        about_app=ALERT_APP, claim="earlier run", signal_uris=[alert], confidence=0.5)}))
+    transcript = []
+    agent = build_autorca(store, h.proc, "hero", llm=scripted_llm, evidence_root=tmp_path,
+                          model=fake_tool_model(prober(transcript, [
+                              {"name": "read_findings", "args": {}},
+                              {"name": "find_symptom", "args": {"alert_id": ALERT}}])))
+    agent.invoke({"messages": [HumanMessage("probe")]})
+    assert json.loads(transcript[0]) == [] and json.loads(transcript[1])["alert"]["uri"] == alert
 
 
 class LiveLog(UsageMetadataCallbackHandler):
