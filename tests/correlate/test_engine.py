@@ -200,6 +200,22 @@ def test_a_change_landing_after_the_cascade_began_is_explained_away():
     assert _linked([early, mid, effect], early, effect)
 
 
+def test_topology_and_explaining_away_switch_independently():
+    cause = sig("cause", "config_change", "svc", -2)
+    first = sig("first", "metric_anomaly", "svc", 0)
+    late = sig("late", "experiment", "svc", 3)
+    effect = sig("effect", "log_error", "edge", 6)
+    off = sig("off", "log_error", "other", 6)
+    signals = [cause, first, late, effect, off]
+
+    def linked(a, b, **switches):
+        return a in {x for x, _ in candidate_links(signals, EDGES, **switches).get(b, ())}
+    assert not linked(late, effect) and not linked(first, off)
+    assert linked(first, off, topology_gate=False) and not linked(late, effect, topology_gate=False)
+    assert linked(late, effect, explain_away=False) and not linked(first, off, explain_away=False)
+    assert linked(late, effect, gate=False) and linked(first, off, gate=False)
+
+
 def test_an_unexplained_blip_before_a_change_does_not_explain_it_away():
     blip = sig("blip", "metric_anomaly", "svc", -1)            # no change behind it
     cfg = sig("cfg", "config_change", "svc", 0)

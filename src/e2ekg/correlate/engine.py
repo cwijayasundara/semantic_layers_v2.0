@@ -16,8 +16,8 @@ The candidate-link graph has an edge a -> b ("a may have caused b") when
     page names (R40); an incident causes nothing; and two onsets of one telemetry
     type on one app are one condition developing, not cause and effect;
   * with the topology gate on (R9, R40), b is on a.app, or b.app calls a.app
-    transitively (an effect travels up the callers), alerts included; and a change a
-    may cause b only if b's cascade had not begun before a: no rooted telemetry
+    transitively (an effect travels up the callers), alerts included;
+  * with explaining away on, a change a may cause b only if b's cascade had not begun before a: no rooted telemetry
     ancestor of b (one some change reaches through admissible links, R42) began in an
     earlier minute than a. An unexplained background blip is no cascade and vetoes
     nothing; an earlier change's cascade vetoes a later change. An effect whose degradation
@@ -30,7 +30,10 @@ no admissible cause (its root) to the symptom; a telemetry signal with no admiss
 cause is an unexplained onset, not a cause, and roots no chain. Its confidence is the
 geometric mean of its pair scores. A backward beam search from the symptom finds them; the
 best chain per root is kept, those under MIN_CONFIDENCE are dropped, and the rest
-are ranked by confidence, then by earliest root."""
+are ranked by confidence, then by earliest root.
+
+The two gates switch independently (R43, `topology_gate`, `explain_away`); the brief's
+`gate` sets both and either switch overrides it."""
 from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -160,8 +163,11 @@ class Topology:
 
 def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
                     gate: bool = True, priors: Mapping[tuple[str, str], float] = PRIORS,
+                    topology_gate: bool | None = None, explain_away: bool | None = None,
                     ) -> dict[Signal, list[tuple[Signal, float]]]:
     """b -> [(a, pair score)] over every admissible cause a of b."""
+    topology_gate = gate if topology_gate is None else topology_gate
+    explain_away = gate if explain_away is None else explain_away
     ordered = sorted(set(signals), key=_order)
     topo = Topology(edges)
     causes: dict[Signal, list[tuple[Signal, float]]] = defaultdict(list)
@@ -169,12 +175,12 @@ def candidate_links(signals: Iterable[Signal], edges: Iterable[tuple[str, str]],
         for a in reversed(ordered[:j]):
             if (_minute(b.at_utc) - _minute(a.at_utc)).total_seconds() > WINDOW_S:
                 break
-            if not may_cause(a, b) or (gate and not topo.allows(a, b)):
+            if not may_cause(a, b) or (topology_gate and not topo.allows(a, b)):
                 continue
             s = pair_score(a, b, priors.get((a.type, b.type), DEFAULT_PRIOR))
             if s > 0:
                 causes[b].append((a, s))
-    if gate:
+    if explain_away:
         rooted: set[Signal] = set()                # reachable from some change
         began: dict[Signal, datetime] = {}         # b's earliest rooted telemetry ancestor
         for b in ordered:
@@ -196,12 +202,13 @@ def _gm(log_scores: tuple[float, ...]) -> float:
 
 def correlate(signals: Iterable[Signal], edges: Iterable[tuple[str, str]], symptom_uri: str,
               gate: bool = True, priors: Mapping[tuple[str, str], float] = PRIORS,
+              topology_gate: bool | None = None, explain_away: bool | None = None,
               ) -> list[Chain]:
     signals = list(signals)
     symptom = next((s for s in signals if s.uri == symptom_uri), None)
     if symptom is None:
         return []
-    causes = candidate_links(signals, edges, gate, priors)
+    causes = candidate_links(signals, edges, gate, priors, topology_gate, explain_away)
     to_root: dict[Signal, float] = {}         # fewest links back to a root change
     for b in sorted(set(signals), key=_order):
         if b not in causes:
