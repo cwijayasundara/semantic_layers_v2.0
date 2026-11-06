@@ -92,8 +92,8 @@ def ranks(df: pl.DataFrame) -> str:
                 row.append("")
                 continue
             kept, uncut = r["true_root_rank"][0], r["true_root_rank_uncut"][0]
-            row.append(f"{kept if kept else 'cut'} (uncut {uncut if uncut else 'absent'}; "
-                       f"{r['n_hypotheses'][0]} over the cut)")
+            where = str(kept) if kept else f"under the cut (uncut {uncut})" if uncut else "absent"
+            row.append(f"{where}; {r['n_hypotheses'][0]} chains over the cut")
         rows.append(row)
     return _table(["scenario", *ENGINE_ARMS], rows) if rows else "(no engine arm ran)"
 
@@ -163,7 +163,9 @@ def render(df: pl.DataFrame, name: str, meta: dict, plan, errors: list[dict]) ->
         pivot(df, "traps", "Red herring first (runs)"),
         pivot(df, "failed", "Failed runs"),
         "## True root's rank in the engine arms", ranks(df),
-        "Rank among the chains over the 0.6 cut; uncut is the rank with the cut lowered to 0. "
-        "Ablations search with a beam of 80.",
+        "Rank among the chains over the 0.6 cut (`under the cut`: the root has a chain, but below "
+        "0.6). Uncut is the rank with the cut lowered to 0 (`absent`: no chain roots at the true "
+        "change at all, e.g. an earlier unrelated cascade explained it away). Ablations search "
+        "with a beam of 80, wide enough that 300 and 1000 gave the same ranks.",
         "## Pass conditions", criteria(df)]
     return "\n\n".join(["\n".join(head), *body]) + "\n"
