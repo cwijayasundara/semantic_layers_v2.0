@@ -310,3 +310,20 @@ def test_run_evals_scores_what_finished_and_writes_the_summary(eval_root, tmp_pa
                       root=eval_root, run_dir=run_dir, say=lambda _: None)
     assert again[2].done == [] and len(again[2].skipped) == 4
     assert len((run_dir / "invocations.jsonl").read_text().splitlines()) == 2
+
+
+def test_root_facts_accepts_a_bare_external_id_as_a_raw_only_report_names_it():
+    from rdflib import Literal, Namespace, URIRef
+
+    from e2ekg.evals.run import _root_facts
+    from e2ekg.graph.store import Store
+    ops, skos = Namespace("https://kg.local/ops#"), Namespace("http://www.w3.org/2004/02/skos/core#")
+    chg = URIRef("https://kg.local/chg/config_change/hero/fpc-3be29b76c7f9")
+    kind, app = URIRef("https://kg.local/chg/kind/config_change"), URIRef("https://kg.local/app/application/x")
+    st = Store(None)
+    st.add_to_graph(URIRef("https://kg.local/graph/t"), [
+        (chg, ops.changeKind, kind), (kind, skos.notation, Literal("config_change")),
+        (chg, ops.changedApp, app)])
+    assert _root_facts(st, str(chg)) == ("config_change", str(app))
+    assert _root_facts(st, "fpc-3be29b76c7f9") == ("config_change", str(app))
+    assert _root_facts(st, 'nope" } SELECT') == (None, None)

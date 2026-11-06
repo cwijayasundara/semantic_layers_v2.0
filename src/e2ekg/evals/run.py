@@ -298,9 +298,15 @@ _PFX = ("PREFIX ops: <https://kg.local/ops#> PREFIX skos: <http://www.w3.org/200
 
 
 def _root_facts(store: Store, uri: str) -> tuple[str | None, str | None]:
-    """(change kind, application URI) of a change in the store."""
-    rows = store.query(_PFX + f"SELECT ?kind ?app WHERE {{ <{uri}> ops:changeKind/skos:notation "
-                       "?kind ; ops:changedApp ?app }")
+    """(change kind, application URI) of a change in the store. A raw-only report names the
+    change by its bare external id, which is matched against the change node's last segment."""
+    if uri.startswith(("http://", "https://")):
+        node, where = f"<{uri}>", ""
+    else:
+        ext = json.dumps(uri.rsplit("/", 1)[-1])
+        node, where = "?c", f' FILTER(STRENDS(STR(?c), CONCAT("/", {ext})))'
+    rows = store.query(_PFX + f"SELECT ?kind ?app WHERE {{ {node} ops:changeKind/skos:notation "
+                       f"?kind ; ops:changedApp ?app .{where} }}")
     return (rows[0]["kind"], rows[0]["app"]) if rows else (None, None)
 
 
