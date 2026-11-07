@@ -1,0 +1,31 @@
+# Proposal for tag_keys
+# Covers the 'quantile' tag key: summary/histogram series need to record which quantile they represent, and no existing property (trc:p50Ms/trc:p99Ms are concrete trace metrics) expresses this.
+# example: 0.5
+# example: 0.99
+
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix ops: <https://kg.local/ops#> .
+@prefix app: <https://kg.local/app#> .
+@prefix team: <https://kg.local/team#> .
+@prefix infra: <https://kg.local/infra#> .
+@prefix chg: <https://kg.local/chg#> .
+@prefix exp: <https://kg.local/exp#> .
+@prefix met: <https://kg.local/met#> .
+@prefix log: <https://kg.local/log#> .
+@prefix trc: <https://kg.local/trc#> .
+@prefix alrt: <https://kg.local/alrt#> .
+@prefix inc: <https://kg.local/inc#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix ecat:  <https://kg.local/log/error_category/> .
+@prefix ckind: <https://kg.local/chg/change_kind/> .
+
+met:quantile a owl:DatatypeProperty ;
+    rdfs:label "quantile"@en ;
+    rdfs:comment "Quantile (between 0 and 1) that the metric series represents, e.g. 0.5 or 0.99 for a summary or histogram series."@en ;
+    rdfs:domain ops:MetricSeries ;
+    rdfs:range xsd:decimal .

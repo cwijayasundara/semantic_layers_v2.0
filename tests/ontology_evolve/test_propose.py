@@ -93,7 +93,11 @@ def test_tag_keys_missing_from_the_core_properties(candidates):
 
 
 def test_prometheus_labels_are_mined_too(candidates):
-    assert "quantile" in candidates.tag_keys
+    assert "state" in candidates.tag_keys
+
+
+def test_an_accepted_proposal_stops_its_key_being_a_candidate(candidates):
+    assert "quantile" not in candidates.tag_keys   # met:quantile, ontology/extensions/proposal-004
 
 
 def test_a_tag_key_named_like_a_property_is_covered(preprocessed_hero, harvested_hero_store,
