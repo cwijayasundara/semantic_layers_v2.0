@@ -31,7 +31,7 @@ from e2ekg.agent.report import RCAReport
 from e2ekg.agent.specialists import build_specialists, prompt
 from e2ekg.agent.tools import make_tools
 from e2ekg.graph.store import Store, graph_uri
-from e2ekg.llm import MODEL_ID
+from e2ekg.llm import MODEL_ID, REQUEST_TIMEOUT_S
 
 EVIDENCE_TOOL = "candidate_evidence"
 COMMANDER_TOOLS = ("find_symptom", "changes_in_window", "causal_chains", EVIDENCE_TOOL,
@@ -52,7 +52,8 @@ def harnessed(model: str | BaseChatModel) -> BaseChatModel:
     """The chat model, with HARNESS registered for it. deepagents keeps profiles in a
     process-global registry keyed provider:model and computes that key with private helpers,
     hence the pinned deepagents version."""
-    chat = init_chat_model(model) if isinstance(model, str) else model
+    chat = (init_chat_model(model, timeout=REQUEST_TIMEOUT_S, max_retries=3)
+            if isinstance(model, str) else model)
     register_harness_profile(f"{get_model_provider(chat)}:{get_model_identifier(chat)}", HARNESS)
     return chat
 

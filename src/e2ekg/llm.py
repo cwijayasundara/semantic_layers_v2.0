@@ -15,6 +15,8 @@ from pydantic import BaseModel, ValidationError
 
 MODEL_ID = "accounts/fireworks/models/glm-5p3-flash"
 RETRIES = 2
+# A dropped connection (a laptop sleeping mid-eval) otherwise hangs a call forever.
+REQUEST_TIMEOUT_S = 180
 
 
 class LLMContractError(Exception):
@@ -43,7 +45,7 @@ class FireworksClient:
     def _structured_chat(self, schema: type[BaseModel]):
         # imported lazily: tests that never call the model need no key or network
         from langchain_fireworks import ChatFireworks
-        return ChatFireworks(model=self.model).with_structured_output(schema)
+        return ChatFireworks(model=self.model, timeout=REQUEST_TIMEOUT_S).with_structured_output(schema)
 
     def structured(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
         key = request_key(self.model, system, user, schema)

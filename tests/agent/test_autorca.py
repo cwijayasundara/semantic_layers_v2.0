@@ -580,3 +580,11 @@ def test_rca_cli_prints_the_report_and_exits_on_the_verdict(monkeypatch, capsys,
     assert code == 1 and seen == {"alert": ALERT, "scenario": "hero", "root": tmp_path,
                                   "evidence": None}
     assert json.loads(capsys.readouterr().out)["summary"] == "nothing survived"
+
+
+def test_live_models_carry_a_request_timeout(monkeypatch):
+    monkeypatch.setenv("FIREWORKS_API_KEY", "test-key-not-used")
+    from e2ekg.agent.autorca import harnessed
+    from e2ekg.llm import MODEL_ID, REQUEST_TIMEOUT_S
+    chat = harnessed(f"fireworks:{MODEL_ID}")
+    assert chat.request_timeout == REQUEST_TIMEOUT_S and chat.max_retries == 3
