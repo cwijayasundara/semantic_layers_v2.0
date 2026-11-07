@@ -1,5 +1,6 @@
 "use client";
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { Alert, CHANGE_TYPES, Job, ScenarioDetail, Status, Topology, api, hhmm, tail, useApi } from "@/lib/api";
 import { Chip, ErrBox, Spin, Stat } from "@/components/Bits";
 
@@ -31,10 +32,12 @@ export default function ScenarioPage({ params }: { params: Promise<{ name: strin
 }
 
 function Header({ d }: { d: ScenarioDetail }) {
-  if (!d.symptom) return <div className="card">No live incident in this scenario.</div>;
+  const caseLink = <Link href={`/scenarios/${d.name}/case`}>Open case view →</Link>;
+  if (!d.symptom) return <div className="card">No live incident in this scenario. {caseLink}</div>;
   const s = d.symptom;
   return (
     <div className="grid g4">
+      <div style={{ gridColumn: "1 / -1" }}>{caseLink} <span className="mut">the graph argument for the AutoRCA verdict: timeline, suspects and raw lineage</span></div>
       <Stat v={<span className="mono">{s.alert.id}</span>} l={`alert on ${s.alert.app} at ${hhmm(s.alert.at)}`} />
       <Stat v={<span className="mono">{s.incident?.id ?? "—"}</span>} l={s.incident ? `incident ${s.incident.severity}, affects ${s.incident.affects.join(", ")}` : "no incident opened before the cutoff"} />
       <Stat v={d.chains.length} l="ranked causal chains (topology gated)" />

@@ -35,6 +35,28 @@ export type Job = {
 export type EvalRun = { name: string; has_results: boolean; meta: Record<string, unknown> };
 export type EvalDetail = { name: string; summary_md: string; results: Record<string, unknown>[] };
 
+export type CaseFacts = { minutes_before_onset: number | null; has_path: boolean; path: string[] };
+export type CaseNode = {
+  id: string; label: string; cls: string | null; cat: string; roles: string[]; app: string | null; at: string | null;
+  hop: number | null; props: Record<string, unknown>; graph: string | null; missing: boolean;
+  agent_reason: string | null; facts: CaseFacts | null; discussed: boolean | null; confidence: number | null;
+  hops?: number | null; first_degraded?: string | null;
+};
+export type CaseEdge = { id: string; source: string; target: string; kind: string };
+export type CaseMeta = {
+  scenario: string; verdict: string; source?: string;
+  alert: Symptom["alert"]; incident: Symptom["incident"];
+  as_of: string; onset_at: string | null; summary: string | null; confidence: number | null;
+  arm: string | null; seconds: number | null; model_calls: number | null; tool_counts: Record<string, number>;
+  chat_note: string | null; has_trail: boolean; unattributed_notes: string[];
+};
+export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; trail: unknown | null };
+export type LineageRecord = {
+  raw_id: string; file: string; offset: number; length: number; sha: string; line: string | null; ts_utc: string | null;
+  processed: { table: string; ts_raw: string | null; skew_ms: number | null; tz_hint: string | null; app_method: string | null; app_confidence: number | null; template: string | null } | null;
+};
+export type Lineage = { uri: string; graph: string | null; records: LineageRecord[] };
+
 export async function api<T>(path: string, body?: unknown): Promise<T> {
   const r = await fetch(`/api${path}`, {
     method: body !== undefined ? "POST" : "GET",
