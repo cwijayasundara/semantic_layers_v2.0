@@ -89,6 +89,28 @@ def test_case_from_job(client, run_report):
         app_module.JOBS.pop("j1", None)
 
 
+def test_case_from_job_has_trail(client, run_report):
+    from e2ekg.graph.uris import BASE
+    furi = f"{BASE}/graph/findings/hero/pay/f1"
+    rep = json.loads(json.dumps(run_report["report"]))
+    rep["hypotheses"][0]["evidence"].append(furi)
+    trail = {"steps": [], "findings": [{"uri": furi, "specialist": "pay", "app": "pay",
+                                        "claim": "pay is saturated", "confidence": 0.8,
+                                        "cites": []}]}
+    app_module.JOBS["j2"] = {"id": "j2", "scenario": "hero", "state": "done",
+                             "alert": run_report["alert"], "report": rep, "trail": trail,
+                             "created": 0.0}
+    try:
+        body = client.get("/api/scenarios/hero/case", params={"source": "job:j2"}).json()
+        assert body["meta"]["has_trail"] is True
+        claims = [n["props"]["claim"] for n in body["nodes"] if n["props"].get("claim")]
+        assert claims == ["pay is saturated"]
+        assert all("trail" not in j and "report" not in j for j in client.get("/api/jobs").json())
+        assert client.get("/api/jobs/j2").json()["trail"] == trail
+    finally:
+        app_module.JOBS.pop("j2", None)
+
+
 def test_lineage_endpoint(client):
     from e2ekg.graph.uris import NS
     rows = app_module._store("hero", "as_of").query(f"""SELECT ?c WHERE {{

@@ -263,15 +263,19 @@ class RcaIn(BaseModel):
 
 def _run_job(job_id: str) -> None:
     from e2ekg.agent.autorca import run_rca
+    from e2ekg.agent.trail import Trail
     job = JOBS[job_id]
     job["state"], job["started"] = "running", time.time()
+    trail = Trail()
     try:
-        report = run_rca(job["alert"], job["scenario"], root=DATA)
+        report = run_rca(job["alert"], job["scenario"], root=DATA, trail=trail)
+        job["trail"] = trail.dump()
         job["report"] = json.loads(report.model_dump_json())
         job["state"] = "done"
     except Exception as e:     # surfaced to the UI; the server keeps running
         job["state"], job["error"] = "failed", f"{type(e).__name__}: {e}"
         job["trace"] = traceback.format_exc()[-4000:]
+        job["trail"] = trail.dump()
     job["finished"] = time.time()
 
 
@@ -293,7 +297,7 @@ def start_rca(scenario: str, body: RcaIn) -> dict:
 
 @app.get("/api/jobs")
 def jobs() -> list[dict]:
-    return sorted(({k: v for k, v in j.items() if k not in ("report", "trace")}
+    return sorted(({k: v for k, v in j.items() if k not in ("report", "trace", "trail")}
                    for j in JOBS.values()), key=lambda j: -j["created"])
 
 

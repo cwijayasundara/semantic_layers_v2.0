@@ -37,6 +37,7 @@ from langchain_core.language_models import BaseChatModel
 from e2ekg.agent.autorca import FailedRCA, run_rca
 from e2ekg.agent.report import Hypothesis, RCAReport
 from e2ekg.agent.tools import make_tools
+from e2ekg.agent.trail import Trail
 from e2ekg.correlate.engine import MIN_CONFIDENCE, correlate
 from e2ekg.evals.arms import ARMS, ENGINE_ARMS, LLM_ARMS
 from e2ekg.evals.rawview import ensure_raw_view
@@ -190,10 +191,11 @@ def run_agent(case: Case, arm: str, evals_dir: Path,
         ensure_raw_view(raw, case.proc, case.as_of, view)
         report = run_raw_only(case.alert_id, view, callbacks=[log], **kw)
     else:
+        trail = Trail()
         report = run_rca(case.alert_id, case.scenario, root=case.root, callbacks=[log],
-                         with_evidence_tool=arm == "graph", **kw)
+                         with_evidence_tool=arm == "graph", trail=trail, **kw)
     return {"report": report.model_dump(), **log.tokens(), "model_calls": log.model_calls,
-            "tools": log.tools}
+            "tools": log.tools, **({"trail": trail.dump()} if arm != "raw_only" else {})}
 
 
 def run_one(spec: RunSpec, *, root: Path, evals_dir: Path,

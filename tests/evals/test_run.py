@@ -144,6 +144,23 @@ def test_the_graph_arms_differ_by_the_evidence_tool(eval_root, eval_uri):
     assert offered["graph"] - {"candidate_evidence"} == offered["graph_no_evidence_tool"]
 
 
+def test_agent_run_saves_trail(eval_root):
+    def policy(messages, bound):
+        done = [m for m in messages if isinstance(m, ToolMessage)]
+        if not done:
+            return AIMessage("", tool_calls=[{"name": "ls", "args": {"path": "/evidence/"},
+                                              "id": "l"}])
+        return AIMessage("", tool_calls=[{"name": "RCAReport", "id": "r", "args": {
+            "verdict": "inconclusive", "hypotheses": [], "summary": "stub"}}])
+    run = run_one(RunSpec("hero", "graph", 0), root=eval_root, evals_dir=eval_root / "evals",
+                  model=fake_tool_model(policy))
+    assert set(run["trail"]) == {"steps", "findings"}
+    assert [s["tool"] for s in run["trail"]["steps"]] == ["ls"]
+    assert run["trail"]["findings"] == []
+    assert "trail" not in run_one(RunSpec("hero", "engine_top", 0), root=eval_root,
+                                  evals_dir=eval_root / "evals")
+
+
 def test_each_graph_run_starts_clean_and_leaves_no_state_behind(eval_root):
     from e2ekg.graph.store import Store
     graph = eval_root / "graph/hero/as_of/store"
