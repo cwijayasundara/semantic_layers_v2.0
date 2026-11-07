@@ -25,6 +25,10 @@ def _nodes(case):
     return {n["id"]: n for n in case["nodes"]}
 
 
+def _when(s):
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
 def _app(case, name):
     [n] = [n for n in case["nodes"] if n["cat"] == "app" and n["label"] == name]
     return n
@@ -103,7 +107,7 @@ def test_first_degraded_ignores_changes_and_incident(case, engine_run):
     nodes = _nodes(case)
     root = nodes[_hyp(engine_run)["root_cause_uri"]]
     root_app = _app(case, root["app"])
-    assert root_app["first_degraded"] > root["at"]
+    assert _when(root_app["first_degraded"]) > _when(root["at"])
     assert case["meta"]["incident"]["affects"] == ["api-gateway"]
     assert _app(case, "api-gateway")["first_degraded"] is None
     incident = nodes[case["meta"]["incident"]["uri"]]
@@ -139,6 +143,28 @@ def test_missing_uri_is_drawn_not_fatal(engine_run, live_tools):
     assert node["cat"] == "finding"
     assert "evidence" in node["roles"]
     assert all(nodes[u]["missing"] is True and "evidence" in nodes[u]["roles"] for u in bad)
+
+
+def test_chat_uris_from_the_report_are_drawn(engine_run, live_tools):
+    from e2ekg.graph.uris import NS
+    [row] = live_tools.store.query(f"""SELECT ?c WHERE {{ ?c <{NS['chat']['claimKind']}>
+        <https://kg.local/chat/claim_kind/observation> }} ORDER BY ?c LIMIT 1""")
+    observation, missing = row["c"], "https://kg.local/chat/claim/hero/deadbeef"
+    evidence = _hyp(engine_run)["evidence"] + [observation, missing]
+    nodes = _nodes(_build(live_tools, with_report(engine_run, evidence=evidence)))
+    assert nodes[missing]["missing"] is True and nodes[missing]["cat"] == "chat"
+    assert nodes[observation]["missing"] is False
+    assert nodes[observation]["props"]["kind"] == "observation"
+    assert {"chat", "evidence"} <= set(nodes[observation]["roles"])
+
+
+def test_report_uris_with_whitespace_are_normalised(engine_run, live_tools):
+    root = _hyp(engine_run)["root_cause_uri"]
+    run = with_report(engine_run, root_cause_uri=f"  {root}\n",
+                      chain=[f" {u} " for u in _hyp(engine_run)["chain"]])
+    node = _nodes(_build(live_tools, run))[root]
+    assert {"root", "chain"} <= set(node["roles"])
+    assert node["facts"]["has_path"] is True
 
 
 def test_findings_enrich_from_trail(engine_run, live_tools):

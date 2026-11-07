@@ -120,16 +120,20 @@ def _facts(tools: dict, alert_id: str, uris: list[str]) -> tuple[dict[str, dict]
                     "has_path": c["call_path"] is not None,
                     "path": [f"{h['caller']}→{h['callee']}" for h in c["call_path"] or []]}
         answered = {c["uri"] for c in out["candidates"]}
-        if not answered:
+        left = [u for u in asked if u not in answered]
+        if len(left) == len(asked):
             break
-        asked = [u for u in asked if u not in answered]
+        asked = left
     return facts, onset
 
 
 def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
                chat_note: str | None = None) -> dict:
     report = run["report"]
-    hyps = report.get("hypotheses") or []
+    hyps = [{**h, "root_cause_uri": (h.get("root_cause_uri") or "").strip() or None,
+             "chain": [u.strip() for u in h.get("chain", [])],
+             "evidence": [u.strip() for u in h.get("evidence", [])]}
+            for h in report.get("hypotheses") or []]
     top = hyps[0] if hyps else {}
     found_root = report["verdict"] == "root_cause_found"
     found = _call(tools, "find_symptom", alert_id=run["alert"])
@@ -201,7 +205,9 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
             roles.append("symptom")
         if cat == "chat":
             roles.append("chat")
-            n["props"] = {**n["props"], "kind": next(c["kind"] for c in chat if c["uri"] == u)}
+            kind = next((c["kind"] for c in chat if c["uri"] == u), None) \
+                or _tail(n["props"].get("chat:claimKind") or "") or None
+            n["props"] = {**n["props"], "kind": kind}
         if cat == "incident":
             n["app"] = alert["app"]       # its `affects` is the humans' first guess
         if cat == "change" or u in suspects:
