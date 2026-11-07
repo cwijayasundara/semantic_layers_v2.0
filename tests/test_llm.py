@@ -28,7 +28,7 @@ def _fake_chat(monkeypatch, outputs):
     calls = []
 
     class Chat:
-        def __init__(self, model):
+        def __init__(self, model, timeout=None):
             self.model = model
 
         def with_structured_output(self, schema):
