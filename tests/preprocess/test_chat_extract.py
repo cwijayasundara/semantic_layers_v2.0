@@ -1,6 +1,7 @@
 import json
 import os
-from datetime import UTC, datetime
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -75,7 +76,7 @@ def msg_len(df, rid):
 
 def test_out_of_scheme_category_rejected(slack_fixture, resolver):
     fake = FakeClient({FakeClient.ANY_KEY: LLMContractError("category 'outage' not allowed")})
-    msgs, claims, quarantine = extract_chat_full(slack_fixture, resolver, fake)
+    msgs, claims, quarantine = extract_chat_full(slack_fixture, resolver, fake, cutoff=None)
     assert set(msgs["status"]) == {"unclassified"} and msgs.height == slack_fixture.height
     assert set(msgs["category"]) == {"unclassified"} and claims.height == 0
     assert quarantine.height == slack_fixture.height
@@ -339,7 +340,7 @@ def test_transport_errors_leave_unclassified_rows(slack_fixture, resolver):
     class Flaky:
         def structured(self, system, user, schema):
             raise ConnectionError("429 rate limited")
-    msgs, claims, q = extract_chat_full(slack_fixture, resolver, Flaky())
+    msgs, claims, q = extract_chat_full(slack_fixture, resolver, Flaky(), cutoff=None)
     assert msgs.height == slack_fixture.height and set(msgs["status"]) == {"unclassified"}
     assert set(q["reason"]) == {"llm_error"} and claims.height == 0
 
@@ -358,7 +359,7 @@ def test_fireworks_client_transport_error_and_atomic_cache(tmp_path, monkeypatch
     attempts = []
 
     class Chat:
-        def __init__(self, model):
+        def __init__(self, model, timeout=None):
             pass
 
         def with_structured_output(self, schema):
@@ -465,9 +466,166 @@ def test_chunk_calls_overlap_and_output_matches_sequential(monkeypatch, resolver
                 with lock:
                     live[0] -= 1
 
-    par = ce.extract_chat_full(df, resolver, Slow())
+    par = ce.extract_chat_full(df, resolver, Slow(), cutoff=None)
     assert peak[0] > 1, "chunk calls never overlapped"
     monkeypatch.setattr(ce, "PARALLEL_CALLS", 1)
-    seq = ce.extract_chat_full(df, resolver, Slow())
+    seq = ce.extract_chat_full(df, resolver, Slow(), cutoff=None)
     for a, b in zip(par, seq, strict=True):
         assert a.equals(b)
+
+
+def test_hero_pre_cutoff_chat_is_what_a_whole_channel_run_gives(preprocessed_hero, scripted_llm):
+    from e2ekg.preprocess.asof import live_cutoff
+    from e2ekg.preprocess.identity import catalog_from_table
+    cutoff = live_cutoff(preprocessed_hero.proc).as_of
+    slack = table(preprocessed_hero, "slack")
+    res = Resolver(catalog_from_table(table(preprocessed_hero, "catalog")), scripted_llm)
+    whole_msgs, whole_claims = extract_chat(slack, res, scripted_llm)
+    msgs, claims = extract_chat(slack, res, scripted_llm, cutoff=cutoff)
+
+    def per_message(m, c, pre):
+        keep = set(m.filter(pl.col("ts_utc") < cutoff)["raw_id"]) if pre else set(m["raw_id"])
+        lab = {r["raw_id"]: (r["category"], r["sentiment"], r["is_incident_related"])
+               for r in m.iter_rows(named=True) if r["raw_id"] in keep}
+        cl = defaultdict(list)
+        for r in c.iter_rows(named=True):
+            if r["raw_id"] in keep:
+                cl[r["raw_id"]].append((r["kind"], r["about_app_uri"], r["about_surface"],
+                                        r["span_start"], r["span_end"]))
+        return lab, {k: sorted(v, key=str) for k, v in cl.items()}
+
+    pre_msgs = msgs.filter(pl.col("ts_utc") < cutoff)
+    assert 0 < pre_msgs.height < msgs.height
+    assert per_message(msgs, claims, pre=True) == per_message(whole_msgs, whole_claims, pre=True)
+
+
+def test_preprocess_chunks_chat_at_the_live_cutoff(preprocessed_hero, scripted_llm, tmp_path):
+    from e2ekg.preprocess.asof import live_cutoff
+    from e2ekg.preprocess.run import preprocess_scenario
+    cutoff = live_cutoff(preprocessed_hero.proc).as_of
+    rec = Recording(scripted_llm)
+
+    class Chat:
+        def structured(self, system, user, schema):
+            return rec.structured(system, user, schema) if schema is BatchExtraction \
+                else scripted_llm.structured(system, user, schema)
+
+    preprocess_scenario(preprocessed_hero.raw, tmp_path / "hero", llm=Chat())
+    when = {r["ts_raw"]: r["ts_utc"] for r in table(preprocessed_hero, "slack").iter_rows(
+        named=True)}
+    assert rec.users
+    for user in rec.users:
+        sides = {when[m["ts"]] is not None and when[m["ts"]] < cutoff
+                 for m in json.loads(user)["messages"]}
+        assert len(sides) == 1
+
+
+T0 = datetime(2026, 10, 14, 22, 0, tzinfo=UTC)
+CUT_AT = 55                       # message index of the first post-cutoff message
+
+
+def _cut_frame(n=100, nulls=2):
+    """One channel of n messages, 10 s apart, cutoff before message CUT_AT (mid second chunk).
+    Message 58 replies to pre-cutoff message 50; the last `nulls` rows have no time."""
+    rows = []
+    for k in range(n):
+        late = k >= CUT_AT
+        text = f"POSTCUT-{k} TMS p99 is up" if late else f"PRECUT-{k} TMS p99 is up"
+        thread = None
+        if k == 50:
+            text = "PRECUT-50 api-gateway deployed at 15:18, that lines up"
+        if k == 58:
+            text, thread = "POSTCUT-58 scratch that, I don't think it's api-gateway", "ts50"
+        rows.append({"raw_id": f"chat|c|{k}|1|x", "channel": "inc-9-x", "user": "U1",
+                     "ts_raw": f"ts{k}", "text": text, "subtype": None,
+                     "thread_ts": thread, "fields": "{}",
+                     "ts_utc": None if k >= n - nulls else T0 + timedelta(seconds=10 * k)})
+    df = pl.DataFrame(rows).with_columns(pl.col("ts_utc").dt.replace_time_zone("UTC"))
+    return df, T0 + timedelta(seconds=10 * CUT_AT - 5)
+
+
+def _has_pre_message(user: str) -> bool:
+    return any(int(m["ts"][2:]) < CUT_AT for m in json.loads(user)["messages"])
+
+
+class Recording:
+    def __init__(self, inner):
+        self.inner, self.users = inner, []
+
+    def structured(self, system, user, schema):
+        self.users.append(user)
+        return self.inner.structured(system, user, schema)
+
+
+def test_no_chunk_spans_the_cutoff(resolver, scripted_llm):
+    df, cutoff = _cut_frame()
+    rec = Recording(scripted_llm)
+    extract_chat_full(df, resolver, rec, cutoff=cutoff)
+    when = dict(zip(df["ts_raw"], df["ts_utc"], strict=True))
+    sides = {frozenset(when[m["ts"]] is not None and when[m["ts"]] < cutoff
+                       for m in json.loads(u)["messages"]) for u in rec.users}
+    assert sides == {frozenset({True}), frozenset({False})}
+    seen = [m["ts"] for u in rec.users for m in json.loads(u)["messages"]]
+    assert sorted(seen) == sorted(df["ts_raw"])
+
+
+def test_a_pre_cutoff_label_call_never_carries_post_cutoff_text(resolver, scripted_llm):
+    df, cutoff = _cut_frame()
+    rec = Recording(scripted_llm)
+    extract_chat_full(df, resolver, rec, cutoff=cutoff)
+    pre_calls = [u for u in rec.users if _has_pre_message(u)]
+    assert pre_calls and all("POSTCUT" not in u for u in pre_calls)
+
+
+def test_post_cutoff_reply_carries_its_pre_cutoff_parent_as_context(resolver, scripted_llm):
+    df, cutoff = _cut_frame()
+    rec = Recording(scripted_llm)
+    msgs, claims, _ = extract_chat_full(df, resolver, rec, cutoff=cutoff)
+    reply = next(m for u in rec.users for m in json.loads(u)["messages"] if m["ts"] == "ts58")
+    assert reply["thread_parent"] is None
+    assert reply["thread_parent_text"] == "PRECUT-50 api-gateway deployed at 15:18, that lines up"
+    r = claims.filter(pl.col("raw_id") == "chat|c|58|1|x", pl.col("kind") == "retraction")
+    assert r.height == 1 and r["link_method"][0] == "thread_parent"
+    target = claims.filter(pl.col("claim_idx") == r["refers_to"][0])
+    assert target["raw_id"][0] == "chat|c|50|1|x" and target["kind"][0] == "hypothesis"
+
+
+def test_scripted_client_reads_the_subject_of_a_parent_carried_as_text(scripted_llm):
+    out = scripted_llm.structured("s", json.dumps({"messages": [{
+        "i": 0, "user": "U1", "ts": "t", "thread_parent": None,
+        "thread_parent_text": "TMS p99 doubled", "text": "rolling back the deploy"}]}),
+        BatchExtraction)
+    assert out.messages[0].claims[0].about_surface == ["TMS"]
+
+
+def test_in_chunk_parent_is_an_index_and_needs_no_text(resolver, scripted_llm):
+    df, _ = _cut_frame()
+    rec = Recording(scripted_llm)
+    extract_chat_full(df, resolver, rec, cutoff=None)
+    reply = next(m for u in rec.users for m in json.loads(u)["messages"] if m["ts"] == "ts58")
+    assert reply["thread_parent"] is not None and "thread_parent_text" not in reply
+
+
+def test_split_keeps_output_deterministic_across_parallelism(monkeypatch, resolver, scripted_llm):
+    import e2ekg.preprocess.chat_extract as ce
+    df, cutoff = _cut_frame()
+    par = ce.extract_chat_full(df, resolver, scripted_llm, cutoff=cutoff)
+    monkeypatch.setattr(ce, "PARALLEL_CALLS", 1)
+    seq = ce.extract_chat_full(df, resolver, scripted_llm, cutoff=cutoff)
+    for a, b in zip(par, seq, strict=True):
+        assert a.equals(b)
+
+
+def test_a_failed_pre_cutoff_chunk_retries_each_message_alone(resolver):
+    df, cutoff = _cut_frame()
+    calls = []
+
+    class Flaky:
+        def structured(self, system, user, schema):
+            calls.append(user)
+            raise LLMContractError("no")
+
+    _, _, q = extract_chat_full(df, resolver, Flaky(), cutoff=cutoff)
+    assert q.height == df.height
+    pre_calls = [u for u in calls if _has_pre_message(u)]
+    assert pre_calls and all("POSTCUT" not in u for u in pre_calls)

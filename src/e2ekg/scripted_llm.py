@@ -107,10 +107,11 @@ def _thread_subject(items: list[dict], it: dict, nicks: frozenset[str]) -> list[
     first message names. A thread that names none, or several, has no single subject, and
     a reply that names another service, even by nickname, is not about the thread's."""
     p = it.get("thread_parent")
-    if p is None or not 0 <= p < len(items) or _named(it["text"], nicks):
+    parent = (items[p]["text"] if p is not None and 0 <= p < len(items)
+              else it.get("thread_parent_text"))
+    if parent is None or _named(it["text"], nicks):
         return []
-    named = _named(items[p]["text"], nicks)
-    return _services(items[p]["text"]) if len(named) == 1 else []
+    return _services(parent) if len(_named(parent, nicks)) == 1 else []
 
 
 def _label(text: str) -> dict:

@@ -22,6 +22,7 @@ from typing import Any
 
 import polars as pl
 
+from e2ekg.preprocess.asof import live_cutoff
 from e2ekg.preprocess.chat_extract import extract_chat_full
 from e2ekg.preprocess.fingerprints import build_fingerprints
 from e2ekg.preprocess.identity import Resolver, catalog_from_table, resolve_tables
@@ -258,7 +259,12 @@ def preprocess_scenario(raw_root: Path, processed_root: Path, llm: Any = None) -
                        "first_overlaps": [o.raw_id for o in cov.overlaps[:20]]}
     report.fingerprints = build_fingerprints(out, report.skew.get("spans"))
     if llm is not None:  # chat labels come only from the closed-output LLM call; no LLM, no labels
-        msgs, claims, q = extract_chat_full(pl.read_parquet(out / "slack.parquet"), resolver, llm)
+        try:   # the live RCA's cutoff, from the tables written above; no symptom, no live RCA
+            cutoff = live_cutoff(out).as_of
+        except ValueError:
+            cutoff = None
+        msgs, claims, q = extract_chat_full(pl.read_parquet(out / "slack.parquet"), resolver, llm,
+                                            cutoff=cutoff)
         for name, frame in (("chat_messages", msgs), ("chat_claims", claims),
                             ("chat_quarantine", q)):
             frame.write_parquet(out / "derived" / f"{name}.parquet", compression="zstd")

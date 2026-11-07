@@ -15,6 +15,14 @@ Choices:
     order, so every thread sits with its parent (a thread alone is mostly one
     message in these exports). If a chunk fails the contract, its messages are
     retried one by one before they are marked unclassified.
+  * The live RCA's cutoff (`asof.live_cutoff`) splits each channel before chunking: no
+    chunk holds messages on both sides of it, so a label or claim for a message before the
+    cutoff is made without reading anything after it (R21). A message with no time is on
+    the later side, as in the as-of filter. A reply after the cutoff whose parent is before
+    it carries the parent's text as `thread_parent_text` (the future may see the past) and
+    `thread_parent` null; the retraction link to the parent's hypothesis is made after the
+    model calls, from the thread (`thread_parent`). `cutoff=None` (no live RCA) chunks whole
+    channels.
   * `refers_to_claim_idx` is an index into the claims of that chunk, flattened in
     message order. A retraction's final `refers_to` is the global `claim_idx` of a
     hypothesis claim, from the model when that reference is valid, else the
@@ -34,6 +42,7 @@ Choices:
 import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Literal
 
 import polars as pl
@@ -123,8 +132,8 @@ def _edit_source(fields: str | None) -> str | None:
         return None
 
 
-def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
-                      ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient,
+                      *, cutoff: datetime | None) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     df = slack_df.sort("channel", "ts_utc", "raw_id", nulls_last=True)
     rows = df.to_dicts()
     by_ts = {(r["channel"], r["ts_raw"]): r["raw_id"] for r in rows if not r["subtype"]}
@@ -133,15 +142,31 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
     # -- model calls ---------------------------------------------------------
     results: dict[int, tuple[ThreadLabel, list[tuple[int, Claim]]] | None] = {}
     errors: dict[int, str] = {}
+    pre_cutoff = {i for i, r in enumerate(rows)
+                  if cutoff is not None and r["ts_utc"] is not None and r["ts_utc"] < cutoff}
     chunks: list[list[int]] = []
     for ch in dict.fromkeys(r["channel"] for r in rows):
         idx = [i for i, r in enumerate(rows) if r["channel"] == ch]
-        chunks += [idx[k:k + CHUNK] for k in range(0, len(idx), CHUNK)]
+        segments = [idx] if cutoff is None else [[i for i in idx if i in pre_cutoff],
+                                                 [i for i in idx if i not in pre_cutoff]]
+        for seg in segments:
+            chunks += [seg[k:k + CHUNK] for k in range(0, len(seg), CHUNK)]
+
+    def parent_text(i: int) -> str | None:
+        """A reply after the cutoff to a message before it: the past may inform the future."""
+        p = by_ts.get((rows[i]["channel"], rows[i]["thread_ts"]))
+        if i in pre_cutoff or p is None or pos[p] not in pre_cutoff:
+            return None
+        return rows[pos[p]]["text"] or ""
+
     def label(chunk: list[int]):
         local = {rows[i]["ts_raw"]: n for n, i in enumerate(chunk) if not rows[i]["subtype"]}
         items = [{"i": n, "user": rows[i]["user"], "ts": rows[i]["ts_raw"],
                   "thread_parent": local.get(rows[i]["thread_ts"]),
                   "text": rows[i]["text"] or ""} for n, i in enumerate(chunk)]
+        for item, i in zip(items, chunk, strict=True):
+            if item["thread_parent"] is None and (ctx := parent_text(i)) is not None:
+                item["thread_parent_text"] = ctx
         try:
             return [(chunk, _call(llm, items))], {}
         except (LLMContractError, LLMTransportError):
@@ -280,8 +305,8 @@ def extract_chat_full(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
     return msgs_df, claims_df, q_df
 
 
-def extract_chat(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient
-                 ) -> tuple[pl.DataFrame, pl.DataFrame]:
+def extract_chat(slack_df: pl.DataFrame, resolver: Resolver, llm: LLMClient,
+                 cutoff: datetime | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
     """(messages_out, claims_out); see the module docstring."""
-    msgs, claims, _ = extract_chat_full(slack_df, resolver, llm)
+    msgs, claims, _ = extract_chat_full(slack_df, resolver, llm, cutoff=cutoff)
     return msgs, claims
