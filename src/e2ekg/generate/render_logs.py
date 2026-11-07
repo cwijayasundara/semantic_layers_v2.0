@@ -266,7 +266,8 @@ def _plant_degradations(w: World, rng, app: str, hosts, planted) -> None:
             t = t[t >= start]
             ab = rng.integers(0, 2 ** 31, size=(len(t), 2))
             if d.end_utc is not None:
-                rec = rec if rec is not None else recovery_rng(w.scenario, app)
+                if rec is None:
+                    rec = recovery_rng(w.scenario, "logs.degradations", app)
                 keep = rec.random(len(t)) < 1.0 - ramp(t, epoch(d.end_utc))
                 t, ab = t[keep], ab[keep]
             for ti, (a, b) in zip(t.tolist(), ab.tolist()):
@@ -290,7 +291,7 @@ def _plant_deploy_blips(w: World, rng, app: str, hosts, planted, ctx) -> None:
         if c.kind != "deployment" or c.app != app:
             continue
         start = epoch(c.at_utc)
-        crng = recovery_rng(w.scenario, app) if after_fix(w.scenario, c) else rng
+        crng = recovery_rng(w.scenario, "logs.blips", c.id) if after_fix(w.scenario, c) else rng
         for h in hosts:
             n = crng.poisson(BLIP_RATE * BLIP_S)
             t = np.sort(start + 5 + crng.random(n) * BLIP_S)

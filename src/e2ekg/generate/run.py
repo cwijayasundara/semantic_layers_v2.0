@@ -16,9 +16,19 @@ the cutoff; the fixed render's post-cutoff records are messed *alongside* the
 baseline's records with the baseline's per-injector rng states replayed, so
 each file-, stream- or series-wide corruption (aliases, units, time zones,
 host skew, ...) lands on them as it did on the baseline, and only they are
-kept. Per file: the baseline's records up to its first post-cutoff record,
-then the fixed records, then the baseline's remaining pre-cutoff records
-(met.late's late arrivals, which the mess writes after everything else)."""
+kept (a file, stream or series only they have is left out of the stream-wide
+injectors' key lists, `mess._base.base_keys`). Per file: the baseline's
+records up to its first post-cutoff record, then the fixed records, then the
+baseline's remaining pre-cutoff records.
+
+Those last ones are met.late's late arrivals: Atlas points stamped before the
+cutoff that the mess appends after everything else in metrics/atlas.jsonl.
+The as-of view keeps them (it filters on the point's own `t`), and in a fixed
+scenario their bytes and times are unchanged but their offsets, so their raw
+ids, are not: they come after post-cutoff data that the fix changed. This is
+accepted: the agent's graph (harvest.ttl) carries no Atlas raw ids. Every
+other record at or before the cutoff keeps its raw id
+(tests/generate/test_recovery.py checks both)."""
 import json
 import zlib
 from dataclasses import asdict, dataclass, field, replace

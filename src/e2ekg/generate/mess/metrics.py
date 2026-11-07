@@ -4,7 +4,14 @@ the value in `v`, Prometheus samples in `value`. One MessInjection per
 import json
 from dataclasses import replace
 
-from e2ekg.generate.mess._base import RECOVERY_TAG, injector, pick, rename_key, with_inserts
+from e2ekg.generate.mess._base import (
+    RECOVERY_TAG,
+    base_keys,
+    injector,
+    pick,
+    rename_key,
+    with_inserts,
+)
 
 DRIFT_RATE, UNIT_RATE, RESET_RATE, GAP_RATE, LATE_RATE, DUP_RATE = 0.10, 0.2, 0.1, 0.05, 0.05, 0.02
 DRIFT_TO = {"atlas_jsonl": ("tags", "nf.app", ("app", "service")),
@@ -60,7 +67,7 @@ def _set_val(r, v):
 def tag_key_drift(self, recs, rng, scenario):
     """From mid-series on, the app tag key changes (nf.app -> app/service)."""
     ser = _series(self, recs, lambda r: DRIFT_TO[r.fmt][1] in (r.fields.get(_TAGS[r.fmt]) or {}))
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), DRIFT_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
@@ -79,7 +86,7 @@ def tag_key_drift(self, recs, rng, scenario):
 def unit_seconds(self, recs, rng, scenario):
     """A latency series reported in seconds although its siblings use ms."""
     ser = _series(self, recs, lambda r: "latency" in r.fields["name"])
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), UNIT_RATE):
         for i in ser[keys[k]]:
@@ -96,7 +103,7 @@ def counter_reset(self, recs, rng, scenario):
     """Process restart mid-series: cumulative counter restarts from zero."""
     ser = {k: v for k, v in _series(self, recs, lambda r: r.fields["name"].endswith("_total"))
            .items() if _n_base(recs, v) >= 2}
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), RESET_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
@@ -120,7 +127,7 @@ def gap(self, recs, rng, scenario):
     """Collector outage: a run of points has no value (`v: null`). The points
     stay in place and the lost values are kept in the detail."""
     ser = {k: v for k, v in _series(self, recs).items() if _n_base(recs, v) >= 6}
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), GAP_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
@@ -139,7 +146,7 @@ def gap(self, recs, rng, scenario):
 def late(self, recs, rng, scenario):
     """A run of points arrives late: appended after everything else in the file."""
     ser = {k: v for k, v in _series(self, recs).items() if _n_base(recs, v) >= 4}
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     late_idx: list[int] = []
     inj = []
     for k in pick(rng, len(keys), LATE_RATE):
@@ -158,7 +165,7 @@ def duplicate_series(self, recs, rng, scenario):
     """A second collector re-emits a series. Atlas copies differ only in tag
     order; Prometheus copies are identical sample lines."""
     ser = _series(self, recs)
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     after: dict[int, list] = {}
     inj = []
     for k in pick(rng, len(keys), DUP_RATE):

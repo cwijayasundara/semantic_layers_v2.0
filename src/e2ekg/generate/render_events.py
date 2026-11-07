@@ -144,7 +144,8 @@ def _ab(w: World, c: Change, rng) -> RawRecord:
 def _commits(w: World, main_rng) -> list[RawRecord]:
     out = []
     for c in w.scenario.changes:
-        rng = recovery_rng(w.scenario, c.app) if after_fix(w.scenario, c) else main_rng
+        rng = (recovery_rng(w.scenario, "events.commits", c.id) if after_fix(w.scenario, c)
+               else main_rng)
         if c.kind == "commit":
             out.append(_rec("events/commits.log", "gitlog", {
                 "sha": external_id(w.scenario, c),
@@ -319,7 +320,7 @@ def render_events(scenario: Scenario, degradations: tuple[Degradation, ...],
     changes: list[RawRecord] = []
     ab = [_rec("events/ab_allocations.csv", "ab_csv", {"header": True})]
     for c in sorted(scenario.changes, key=lambda c: (c.at_utc, c.id)):
-        crng = recovery_rng(scenario, c.app) if after_fix(scenario, c) else rng
+        crng = recovery_rng(scenario, "events", c.id) if after_fix(scenario, c) else rng
         if c.kind in ("deployment", "client_release"):
             changes += _deploy(w, c, crng)
         elif c.kind == "config_change":

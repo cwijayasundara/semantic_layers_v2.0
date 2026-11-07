@@ -6,6 +6,7 @@ from itertools import pairwise
 
 from e2ekg.generate.formats import Stamp
 from e2ekg.generate.mess._base import (
+    base_keys,
     by_path,
     injector,
     local_index,
@@ -34,7 +35,7 @@ def _is_log(self, r) -> bool:
 def tz_mix(self, recs, rng, scenario):
     """Some hosts render timestamps in PT (log4j_pt has no offset) or epoch ms."""
     files = by_path(recs, lambda r: _is_log(self, r))
-    paths = list(files)
+    paths = base_keys(recs, files)
     out, inj = list(recs), []
     for k in pick(rng, len(paths), TZ_RATE):
         p = paths[k]
@@ -52,9 +53,10 @@ def tz_mix(self, recs, rng, scenario):
 @injector("log.host_skew", ("logs",))
 def host_skew(self, recs, rng, scenario):
     files = by_path(recs, lambda r: _is_log(self, r) and r.rel_path.startswith(HOST_SKEW_APP_DIR))
-    if not files:
+    paths = sorted(base_keys(recs, files))
+    if not paths:
         return list(recs), []
-    p = sorted(files)[int(rng.integers(len(files)))]
+    p = paths[int(rng.integers(len(paths)))]
     out = list(recs)
     for i in files[p]:
         out[i] = set_fields(out[i], ts=shift_ts(out[i].fields["ts"], HOST_SKEW))

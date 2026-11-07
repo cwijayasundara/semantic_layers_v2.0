@@ -84,12 +84,14 @@ def after_fix(s: Scenario, c: Change) -> bool:
     return fix is not None and c.at_utc >= fix.at_utc
 
 
-def recovery_rng(s: Scenario, app: str) -> np.random.Generator:
-    """The rng for draws that only recovery makes, one stream per app, never one
-    of the renderers' streams. (numpy seeds take ints, so the "recovery" tag and
-    the app are crc32'd the way run.py derives the renderers' streams.)"""
-    return np.random.default_rng(
-        np.random.SeedSequence([s.seed, zlib.crc32(b"recovery"), zlib.crc32(app.encode())]))
+def recovery_rng(s: Scenario, *key: str) -> np.random.Generator:
+    """The rng for draws that only recovery makes, never one of the renderers'
+    streams: one stream per key, which names the renderer and what it draws for
+    (an app, a change id), so no two draw sites replay each other. (numpy seeds
+    take ints, so "recovery" and the key parts are crc32'd the way run.py
+    derives the renderers' streams from [seed, crc32(name)].)"""
+    return np.random.default_rng(np.random.SeedSequence(
+        [s.seed, zlib.crc32(b"recovery"), *(zlib.crc32(k.encode()) for k in key)]))
 
 
 def fix_change(s: Scenario) -> Change | None:

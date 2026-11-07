@@ -2,15 +2,18 @@
 through model_copy (the property reverted 12 -> 48 at 17:20 PT, the ASG scaling
 out 12 -> 24 -> 36 -> 48 -> 56), at fixture scale."""
 import json
-from collections import defaultdict
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import FIXTURE_SCALE
 
-from e2ekg.generate.mess import apply_mess
+import e2ekg.generate.run as run
+from e2ekg.generate.records import write_source
 from e2ekg.generate.render_metrics import DIURNAL_AMP
-from e2ekg.generate.run import generate_scenario, render_unmessed
+from e2ekg.generate.run import baseline_scenario, generate_scenario, render_unmessed
 from e2ekg.generate.world import World, as_of_utc, epoch, mitigation_attempts
 from e2ekg.scenario.hero import hero_scenario
 from e2ekg.scenario.model import Change, Scenario
@@ -18,6 +21,7 @@ from e2ekg.timeutil import pt
 
 TARGET = "title-metadata-svc"
 ASG = "title-metadata-svc-v042"
+NEW_APP = "lolomo-svc"
 
 
 def _pt(h: int, m: int):
@@ -42,7 +46,7 @@ def with_fix(s: Scenario) -> Scenario:
 
 @pytest.fixture(scope="module")
 def fixed() -> Scenario:
-    return with_fix(hero_scenario())
+    return with_fix(plain_hero())
 
 
 @pytest.fixture(scope="module")
@@ -89,53 +93,122 @@ def test_failed_bumps_still_reset_to_floor(fixed):
     assert all(m.at_utc < _pt(17, 20) for m in ms)
 
 
+def plain_hero() -> Scenario:
+    """The hero without any fix (its baseline, should hero.py carry one)."""
+    return baseline_scenario(hero_scenario())
+
+
+def with_new_series(s: Scenario) -> Scenario:
+    """with_fix plus a post-fix scale-out of an app that has no ASG series, no
+    scaling events and no asg metrics before: every key it makes is new."""
+    assert not any(c.kind == "scaling" and c.app == NEW_APP for c in s.changes)
+    s = with_fix(s)
+    extra = Change(id="chg-asg-0201", kind="scaling", app=NEW_APP, at_utc=_pt(17, 22),
+                   attrs={"asg": f"{NEW_APP}-v007", "previous_capacity": "6",
+                          "desired_capacity": "9"}, is_root_cause=False)
+    return s.model_copy(update={"changes": (*s.changes, extra)})
+
+
+@dataclass
+class Tree:
+    root: Path
+    recs: list      # the RawRecords generate_scenario wrote, in order
+    ids: list[str]  # their raw ids, as write_source made them
+
+    def manifest(self) -> dict:
+        return json.loads((self.root.parent / "_answers" / "hero.manifest.json").read_text())
+
+
+def _generate(s: Scenario, root: Path) -> Tree:
+    seen = {}
+
+    def spy(records, out):
+        got = write_source(records, out)
+        seen["recs"], seen["ids"] = list(records), [rid for rid, _ in got]
+        return got
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(run, "write_source", spy)
+        generate_scenario(s, root, scale=FIXTURE_SCALE)
+    return Tree(root, seen["recs"], seen["ids"])
+
+
 @pytest.fixture(scope="module")
-def generated_pair(tmp_path_factory, fixed):
+def trees(tmp_path_factory, fixed) -> dict[str, Tree]:
     base = tmp_path_factory.mktemp("recovery")
-    plain, fx = base / "plain" / "hero", base / "fix" / "hero"
-    generate_scenario(hero_scenario(), plain, scale=FIXTURE_SCALE)
-    generate_scenario(fixed, fx, scale=FIXTURE_SCALE)
-    return plain, fx
+    return {name: _generate(s, base / name / "hero") for name, s in
+            (("plain", plain_hero()), ("fix", fixed), ("new", with_new_series(plain_hero())))}
 
 
-def _join(rs) -> bytes:
-    return b"".join(x.payload + b"\n" for x in rs)
+def _late_relocated(t: Tree, cut) -> set[int]:
+    """Indices of pre-cutoff records written after a later record of their file:
+    met.late's late arrivals."""
+    seen_post, out = set(), set()
+    for k, r in enumerate(t.recs):
+        if r.at_utc is not None and r.at_utc > cut:
+            seen_post.add(r.rel_path)
+        elif r.rel_path in seen_post:
+            out.add(k)
+    return out
 
 
-def test_pre_cutoff_records_identical(generated_pair, fixed):
-    """Every raw record at or before as_of (ground-truth time, from the generator's
-    own messy record list of the unfixed hero) is byte-identical with and without
-    the fix. Records in time order before the cutoff keep their byte offsets (so
-    their raw ids); the few atlas points `met.late` appends after everything else
-    in the file stay byte-identical and stay at the end of the file."""
-    plain, fx = generated_pair
-    hero = hero_scenario()
-    cut = as_of_utc(hero)
+def _bytes_key(rid: str, at) -> tuple:
+    src, rest = rid.split("|", 1)
+    rel, _off, length, digest = rest.rsplit("|", 3)
+    return src, rel, length, digest, at
+
+
+def assert_pre_cutoff_identical(plain: Tree, fx: Tree, cut) -> int:
+    """Every record at or before the cutoff has the same raw id (source, file,
+    offset, length, digest) and time in both trees, except met.late's late
+    arrivals: those keep their bytes (length, digest) and time but sit after the
+    post-cutoff data, so their offset (raw id) moves. Nothing else differs, and
+    the fixed tree has no other record at or before the cutoff."""
+    def pre(t: Tree):
+        return [(k, rid, r.at_utc) for k, (r, rid) in enumerate(zip(t.recs, t.ids))
+                if r.at_utc is None or r.at_utc <= cut]
+
+    late = _late_relocated(plain, cut)
+    p, f = pre(plain), pre(fx)
+    f_ids = {rid: at for _, rid, at in f}
+    moved = [(rid, at) for k, rid, at in p if k in late]
+    kept = [(rid, at) for k, rid, at in p if k not in late]
+    for rid, at in kept:
+        assert rid in f_ids and f_ids[rid] == at, rid
+    kept_ids = {rid for rid, _ in kept}
+    rest = Counter(_bytes_key(rid, at) for rid, at in f_ids.items() if rid not in kept_ids)
+    assert rest == Counter(_bytes_key(rid, at) for rid, at in moved)
+    assert len(f) == len(p)
+    # The exception set is exactly met.late's relocated points.
+    assert all(rid.startswith("atlas|metrics/atlas.jsonl|") for rid, _ in moved)
+    late_at = Counter(at for i in plain.manifest()["injections"]
+                      if i["injector_id"] == "met.late"
+                      for at in json.loads(i["detail"])["at_utc"])
+    assert all(late_at[at.isoformat()] for _, at in moved)
+    return len(moved)
+
+
+def test_pre_cutoff_records_identical(trees, fixed):
+    cut = as_of_utc(plain_hero())
     assert cut == as_of_utc(fixed)
-    r = render_unmessed(hero, FIXTURE_SCALE)
-    recs, _ = apply_mess(r.all_records(), r.mess_rng, hero)
-    per_file = defaultdict(list)
-    for rec in recs:
-        per_file[rec.rel_path].append(rec)
-    checked = 0
-    for rel, rs in per_file.items():
-        assert (plain / rel).read_bytes() == _join(rs)  # the in-memory list is what was written
-        pre = [x.at_utc is None or x.at_utc <= cut for x in rs]
-        k = pre.index(False) if False in pre else len(rs)
-        late = [x for x, p in zip(rs[k:], pre[k:]) if p]
-        b = (fx / rel).read_bytes()
-        assert b.startswith(_join(rs[:k])), rel   # same bytes at the same offsets
-        assert b.endswith(_join(late)), rel
-        checked += k + len(late)
-    assert checked > 0.5 * len(recs)
-    # Nothing new before the cutoff anywhere: a file only the fixed run has holds no
-    # record at or before the cutoff (its lines all come from after it).
-    assert {p.relative_to(plain) for p in plain.rglob("*") if p.is_file()} <= \
-        {p.relative_to(fx) for p in fx.rglob("*") if p.is_file()}
+    assert assert_pre_cutoff_identical(trees["plain"], trees["fix"], cut) > 0
 
 
-def test_answers_record_the_fix(generated_pair):
-    plain, fx = generated_pair
+def test_new_post_fix_series_leave_the_cutoff_alone(trees):
+    """A fix that creates files, streams and series no earlier record has (an
+    ASG series for an app that never scaled): still nothing before the cutoff
+    changes, the stream-wide mess is the baseline's, and the new series is there."""
+    cut = as_of_utc(plain_hero())
+    assert_pre_cutoff_identical(trees["plain"], trees["new"], cut)
+    assert _wide(trees["plain"]) == _wide(trees["new"])
+    pts = [r for r in trees["new"].recs if r.source == "atlas"
+           and r.fields["name"] == "asg.instances.inservice"
+           and NEW_APP in json.dumps(r.fields["tags"]) and r.at_utc > cut]
+    assert pts and max(r.fields["v"] for r in pts) == 9
+
+
+def test_answers_record_the_fix(trees):
+    plain, fx = trees["plain"].root, trees["fix"].root
     a = json.loads((fx.parent / "_answers" / "hero.json").read_text())
     assert a["fix_change_id"] == "chg-cfg-0101"
     assert a["recovered_utc"] is not None and a["recovered_utc"] > "2026-10-15T00:20:00Z"
@@ -157,25 +230,25 @@ def test_post_fix_data_shows_recovery(fixed):
     assert not any(t >= _pt(17, 50) for t in pool)
 
 
-def test_stream_wide_mess_is_the_same_after_the_cutoff(generated_pair):
+WIDE = ("id.alias_surface", "id.casing", "id.suffix", "id.kind_confusion",
+        "id.stale_catalog_alias", "met.tag_key_drift", "met.unit_seconds",
+        "met.counter_reset", "met.duplicate_series", "log.tz_mix", "log.host_skew")
+
+
+def _wide(t: Tree) -> set:
+    out = set()
+    for i in t.manifest()["injections"]:
+        if i["injector_id"] in WIDE:
+            d = json.loads(i["detail"])
+            d.pop("count", None)
+            out.add((i["injector_id"], i["rel_path"], json.dumps(d, sort_keys=True)))
+    return out
+
+
+def test_stream_wide_mess_is_the_same_after_the_cutoff(trees):
     """File-, stream- and series-wide corruptions (aliases, units, tag drift,
     counter resets, time zones, host skew) hit the post-cutoff records exactly as
     they hit the same files and series before it, so no stream changes its
     surface at the cutoff: the fixed run's manifest lists the same ones."""
-    plain, fx = generated_pair
-    wide = ("id.alias_surface", "id.casing", "id.suffix", "id.kind_confusion",
-            "id.stale_catalog_alias", "met.tag_key_drift", "met.unit_seconds",
-            "met.counter_reset", "met.duplicate_series", "log.tz_mix", "log.host_skew")
-
-    def injections(root):
-        m = json.loads((root.parent / "_answers" / "hero.manifest.json").read_text())
-        out = set()
-        for i in m["injections"]:
-            if i["injector_id"] in wide:
-                d = json.loads(i["detail"])
-                d.pop("count", None)
-                out.add((i["injector_id"], i["rel_path"], json.dumps(d, sort_keys=True)))
-        return out
-
-    a, b = injections(plain), injections(fx)
-    assert a and a == b
+    a = _wide(trees["plain"])
+    assert a and a == _wide(trees["fix"])

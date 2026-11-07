@@ -7,6 +7,7 @@ from dataclasses import replace
 from e2ekg.generate.mess._base import (
     FnInjector,
     app_ref,
+    base_keys,
     injector,
     local_index,
     pick,
@@ -32,7 +33,7 @@ def _rewrite_streams(self: FnInjector, recs, rng, scenario, rate, surface, want=
         ref = app_ref(r) if self.eligible(r) else None
         if ref and ref[1] in apps and (want is None or want(apps[ref[1]])):
             streams.setdefault((r.rel_path, ref[1]), []).append(i)
-    keys = list(streams)
+    keys = base_keys(recs, streams)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), rate):
         rel, app = keys[k]

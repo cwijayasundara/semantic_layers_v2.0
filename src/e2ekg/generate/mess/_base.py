@@ -99,6 +99,16 @@ def local_index(recs: list[RawRecord]) -> list[int]:
     return out
 
 
+def base_keys(recs: list[RawRecord], groups: dict) -> list:
+    """The keys of `groups` (key -> record indices) that hold a non-recovery
+    record, in order. Normally all of them; while recovery records are messed
+    next to the baseline (RECOVERY_TAG), a file, stream or series only they
+    have is left out, so a stream-wide injector picks over the baseline's own
+    key list (the same draws, the same choices) and leaves that key alone."""
+    return [k for k, idxs in groups.items()
+            if any(RECOVERY_TAG not in recs[i].tags for i in idxs)]
+
+
 def by_path(recs: list[RawRecord], keep: Callable[[RawRecord], bool]) -> dict[str, list[int]]:
     out: dict[str, list[int]] = {}
     for i, r in enumerate(recs):
