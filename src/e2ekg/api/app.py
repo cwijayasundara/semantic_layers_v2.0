@@ -8,6 +8,9 @@ Read endpoints open each scenario's stores read-only and go through the agent's 
   GET  /api/scenarios/{s}                  live symptom, ranked causal chains, changes near it
   GET  /api/scenarios/{s}/topology         dependsOn edges with app kind and tier
   GET  /api/scenarios/{s}/alerts           alerts in the as-of store, newest first
+  GET  /api/scenarios/{s}/case             RCA case graph for a saved run (?source=eval:<run>|job:<id>)
+  GET  /api/scenarios/{s}/lineage          raw -> processed lineage of a node (?uri=)
+  GET  /api/scenarios/{s}/scorecard        per-arm scorecard of an eval run (?run=)
   POST /api/scenarios/{s}/sparql           read-only SELECT on the as-of or full store
   GET  /api/ontology                       classes and SKOS taxonomies
   POST /api/scenarios/{s}/rca              start AutoRCA (Fireworks) in the background
@@ -329,3 +332,85 @@ def eval_run(run: str) -> dict:
         import polars as pl
         rows = pl.read_parquet(p / "results.parquet").to_dicts()
     return {"name": run, "summary_md": (p / "summary.md").read_text(), "results": rows}
+
+
+# --- RCA case view --------------------------------------------------------------------------
+
+NO_RUN = ("no saved RCA run for {s}: run `uv run e2ekg eval --scenarios {s} --arms graph "
+          "--runs 1` or start one from the AutoRCA tab")
+SCRIPTED_CHAT_NOTE = "claims extracted by scripted stand-in"
+
+
+def _eval_runs(scenario: str) -> list[Path]:
+    """Eval run dirs holding a saved graph-arm run for the scenario, newest first."""
+    d = _evals_dir()
+    if not d.is_dir():
+        return []
+    return sorted((p for p in d.iterdir()
+                   if p.is_dir() and (p / "runs" / f"{scenario}__graph__0.json").exists()),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _run_for(scenario: str, source: str = "") -> tuple[dict, Path | None]:
+    """The saved run behind `source` and its eval run dir (None for a job)."""
+    if source.startswith("job:"):
+        j = JOBS.get(source[4:])
+        if not j or j["scenario"] != scenario or j["state"] != "done":
+            raise HTTPException(404, f"no finished AutoRCA job {source[4:]!r} for {scenario}")
+        return {"report": j["report"], "alert": j["alert"], "trail": j.get("trail")}, None
+    if source.startswith("eval:"):
+        name = source[5:]
+        p = _evals_dir() / name
+        f = p / "runs" / f"{scenario}__graph__0.json"
+        if "/" in name or ".." in name or not f.exists():
+            raise HTTPException(404, f"no saved run {name!r} for {scenario}")
+    elif source:
+        raise HTTPException(404, f"unknown source {source!r}; use eval:<run> or job:<id>")
+    else:
+        runs = _eval_runs(scenario)
+        if not runs:
+            raise HTTPException(404, NO_RUN.format(s=scenario))
+        p = runs[0]
+        f = p / "runs" / f"{scenario}__graph__0.json"
+    return json.loads(f.read_text()), p
+
+
+def _chat_note(run_dir: Path | None) -> str | None:
+    meta = run_dir / "meta.json" if run_dir else None
+    if meta and meta.exists() and "ScriptedClient" in str(json.loads(meta.read_text()).get("chat")):
+        return SCRIPTED_CHAT_NOTE
+    return None
+
+
+@app.get("/api/scenarios/{scenario}/case")
+def case(scenario: str, source: str = "") -> dict:
+    from e2ekg.explain.case import build_case
+    run, run_dir = _run_for(scenario, source)
+    tools = _tools(scenario, "as_of")
+    try:
+        return build_case(_store(scenario, "as_of"), tools, scenario, run,
+                          chat_note=_chat_note(run_dir))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/scenarios/{scenario}/lineage")
+def lineage(scenario: str, uri: str) -> dict:
+    from e2ekg.explain.lineage import lineage as _lineage
+    _store(scenario, "as_of")
+    return _lineage(_tools(scenario, "as_of"), DATA / "processed" / scenario, uri)
+
+
+@app.get("/api/scenarios/{scenario}/scorecard")
+def scorecard(scenario: str, run: str = "") -> dict:
+    from e2ekg.explain.scorecard import scorecard as _scorecard
+    if run:
+        p = _evals_dir() / run
+        if "/" in run or ".." in run or not (p / "results.parquet").exists():
+            raise HTTPException(404, f"no scored eval run {run!r}")
+    else:
+        runs = [r for r in _eval_runs(scenario) if (r / "results.parquet").exists()]
+        if not runs:
+            raise HTTPException(404, NO_RUN.format(s=scenario))
+        p = runs[0]
+    return _scorecard(p, scenario)
