@@ -1,0 +1,379 @@
+"""The correlation engine on the as-of stores the live RCA reads (R34), and the rules
+that decide it, each on a small hand-built signal set."""
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from e2ekg.correlate.engine import (
+    CHANGE_TYPES, PRIORS, Signal, candidate_links, correlate, pair_score,
+)
+from e2ekg.graph.enrichers.correlation import (
+    onsets, priors_with_history, severity, signals_from_store,
+)
+from e2ekg.graph.uris import change_uri
+from e2ekg.scenario.hero import hero_scenario
+from e2ekg.scenario.topology import upstream_closure
+
+HERO = hero_scenario()
+KIND = {c.id: c.kind for c in HERO.changes}
+HERRINGS = HERO.answer_key.red_herring_change_ids
+
+
+@pytest.fixture(scope="module")
+def uri_of(hero_answers):
+    external = {v: k for k, v in hero_answers["external_ids"].items()}
+    return lambda cid: str(change_uri("hero", KIND[cid], external[cid]))
+
+
+# --- the hero, as of its cutoff -------------------------------------------------------
+
+def test_true_chain_ranks_first(harvested_hero_signals, uri_of):
+    chains = correlate(*harvested_hero_signals, gate=True)
+    assert chains[0].links[0].uri == uri_of("chg-cfg-0001")
+    assert chains[0].confidence >= 0.6
+
+
+def test_the_true_chain_is_the_scale_in_travelling_up_the_tms_callers(harvested_hero_signals,
+                                                                       uri_of):
+    links = correlate(*harvested_hero_signals)[0].links
+    asg = {uri_of(c.id) for c in HERO.changes if c.kind == "scaling"}
+    assert links[1].uri in asg
+    path = upstream_closure(HERO.edges, HERO.fault.target) | {HERO.fault.target}
+    assert {s.app for s in links[:-1]} <= path
+    apps = [s.app for s in links]
+    assert apps.index("title-metadata-svc") < apps.index("title-batch-loader") \
+        < apps.index("lolomo-svc")
+    assert (links[-2].type, links[-2].app) == ("alert", "homepage-graphql")
+    assert links[-1].type == "incident"
+
+
+def test_red_herrings_not_top_with_gate(harvested_hero_signals, uri_of):
+    roots = [c.links[0].uri for c in correlate(*harvested_hero_signals, gate=True)[:3]]
+    assert not {uri_of(h) for h in HERRINGS} & set(roots)
+
+
+def test_without_gate_api_gateway_trap_survives(harvested_hero_signals, uri_of):
+    roots = [c.links[0].uri for c in correlate(*harvested_hero_signals, gate=False)]
+    assert uri_of("chg-dep-0001") in roots
+
+
+def test_skewed_host_does_not_reorder_chain(harvested_hero_signals):
+    links = [link.type for link in correlate(*harvested_hero_signals)[0].links]
+    assert links.index("metric_anomaly") < links.index("log_error")
+
+
+def test_two_unexplained_blips_on_the_tms_cache_do_not_unseat_the_true_root(
+        harvested_hero_signals, uri_of):
+    signals, edges, symptom = harvested_hero_signals
+    cfg = next(s for s in signals if s.uri == uri_of("chg-cfg-0001"))
+    blips = [Signal("urn:blip-1", "metric_anomaly", "evcache-titles",
+                    cfg.at_utc - timedelta(minutes=1), 0.5),
+             Signal("urn:blip-2", "log_error", "evcache-titles",
+                    cfg.at_utc + timedelta(minutes=6), 0.5)]
+    chains = correlate(signals + blips, edges, symptom)
+    assert chains[0].links[0].uri == uri_of("chg-cfg-0001")
+
+
+def test_history_priors_do_not_flip_the_hero(harvested_hero_signals, harvested_hero_as_of, uri_of):
+    pri = priors_with_history(harvested_hero_as_of.store)
+    assert pri[("deployment", "log_error")] > PRIORS[("deployment", "log_error")]
+    assert correlate(*harvested_hero_signals, priors=pri)[0].links[0].uri == uri_of("chg-cfg-0001")
+
+
+def test_control_variant_yields_no_chain_to_a_change(harvested_control_signals):
+    assert all(c.links[0].type not in CHANGE_TYPES for c in correlate(*harvested_control_signals))
+
+
+def test_the_control_investigates_an_alert_of_its_own_window(harvested_control_as_of,
+                                                             harvested_control_signals):
+    r = harvested_control_as_of.report
+    assert all(v.success for v in r.results.values()), r.results
+    signals, _, symptom = harvested_control_signals
+    assert "/alrt/alert/v-control/" in symptom
+    assert symptom in {s.uri for s in signals if s.type == "alert"}
+    assert not [s for s in signals if s.type == "incident"]       # history incidents are not live
+
+
+def test_the_only_incident_signal_is_the_live_symptom(harvested_hero_signals):
+    signals, _, symptom = harvested_hero_signals
+    assert symptom.endswith("/inc/incident/hero/INC-5377")
+    assert [s.uri for s in signals if s.type == "incident"] == [symptom]
+
+
+# --- signals drawn from the store -----------------------------------------------------
+
+def test_one_signal_per_type_app_and_onset_minute(harvested_hero_as_of):
+    signals = signals_from_store(harvested_hero_as_of.store)
+    keys = [(s.type, s.app, s.at_utc.replace(second=0)) for s in signals
+            if s.type not in CHANGE_TYPES | {"alert", "incident"}]
+    assert len(keys) == len(set(keys))
+    cited = [e for s in signals for e in s.evidence]
+    assert len(cited) == len(set(cited))
+    tbl = [s for s in signals if s.type == "metric_anomaly" and s.app == "title-batch-loader"]
+    assert sum(len(s.evidence) for s in tbl) > len(tbl)          # per-series rows folded
+
+
+def test_severity_is_half_at_the_detector_threshold_and_below_one_for_huge_magnitudes():
+    assert severity("metric_anomaly", 5.0) == 0.5
+    assert severity("log_error", 6.0) == 0.5
+    assert severity("slow_trace", 2.0) == 0.5
+    assert severity("failed_trace", 6.0) == 0.5          # 6 binomial sigmas, its own threshold
+    assert 0.99 < severity("metric_anomaly", 1780.0) < 1.0
+    assert severity("slow_trace", 2.0) < severity("slow_trace", 20.0)
+
+
+def test_a_deviation_over_a_zero_baseline_has_no_finite_magnitude_and_full_severity():
+    assert severity("slow_trace", None) == severity("metric_anomaly", None) == 1.0
+
+
+def _fp(name, t, minutes, family="f"):
+    return {"s": f"urn:{name}", "type": "metric_anomaly", "app": "svc", "family": family,
+            "t": T0 + timedelta(minutes=t), "end": T0 + timedelta(minutes=t + minutes), "m": 6.0}
+
+
+def test_a_chronic_episode_folds_at_most_a_window_of_detections():
+    rows = [_fp("a", 0, 6), _fp("b", 5, 6), _fp("c", 9, 6), _fp("d", 12, 6), _fp("e", 30, 2)]
+    assert sorted((s.at_utc - T0).total_seconds() / 60 for s in onsets(rows)) == [0, 12, 30]
+
+
+def test_the_enricher_writes_the_chain_that_explains_the_live_incident(harvested_hero_as_of,
+                                                                       uri_of):
+    rows = harvested_hero_as_of.store.query("""
+        PREFIX ops: <https://kg.local/ops#> PREFIX prov: <http://www.w3.org/ns/prov#>
+        PREFIX inc: <https://kg.local/inc#>
+        SELECT ?c ?conf ?i ?src WHERE {
+          ?c a ops:CausalChain ; ops:explains/inc:incidentId "INC-5377" ; ops:confidence ?conf ;
+             ops:hasLink ?l . ?l ops:linkOrder ?i ; prov:wasDerivedFrom ?src }""")
+    best = max({r["c"] for r in rows}, key=lambda c: float(next(r["conf"] for r in rows
+                                                              if r["c"] == c)))
+    links = sorted((int(r["i"]), r["src"]) for r in rows if r["c"] == best)
+    assert [i for i, _ in links] == list(range(len(links)))
+    assert links[0][1] == uri_of("chg-cfg-0001")
+    assert links[-1][1].endswith("/INC-5377")
+
+
+# --- the rules, on hand-built signals ---------------------------------------------------
+
+T0 = datetime(2026, 10, 14, 22, 0, tzinfo=UTC)
+
+
+def sig(name: str, kind: str, app: str | None, minute: float, sev: float = 1.0,
+        opened_by: tuple[str, ...] = ()) -> Signal:
+    return Signal(uri=f"urn:{name}", type=kind, app=app, at_utc=T0 + timedelta(minutes=minute),
+                  severity=sev, opened_by=tuple(f"urn:{a}" for a in opened_by))
+
+
+# edge -> mid -> svc (caller -> callee); the edge is every request's ancestor
+EDGES = [("edge", "mid"), ("mid", "svc"), ("edge", "other")]
+
+
+def _linked(signals, a, b, gate=True) -> bool:
+    return a in {x for x, _ in candidate_links(signals, EDGES, gate).get(b, ())}
+
+
+def test_pair_score_follows_the_brief_formula():
+    a, b = sig("a", "metric_anomaly", "svc", 0), sig("b", "log_error", "svc", 5, sev=0.6)
+    assert pair_score(a, b, 0.75) == pytest.approx(0.75 * (1 - 0.4 * 300 / 600) * (0.5 + 0.3))
+    assert pair_score(b, a, 0.75) == 0.0
+    assert pair_score(a, sig("c", "log_error", "svc", 10.5), 0.75) == 0.0
+
+
+def test_an_effect_up_the_callers_passes_the_gate_and_one_off_them_does_not():
+    dep = sig("dep", "deployment", "svc", 0)
+    up, off = sig("up", "log_error", "edge", 3), sig("off", "log_error", "other", 3)
+    assert _linked([dep, up, off], dep, up)
+    assert not _linked([dep, up, off], dep, off)
+    assert _linked([dep, up, off], dep, off, gate=False)
+
+
+def test_an_alert_is_gated_like_telemetry():
+    dep = sig("dep", "deployment", "svc", 0)
+    up, off = sig("up", "alert", "edge", 3), sig("off", "alert", "other", 3)
+    assert _linked([dep, up, off], dep, up)
+    assert not _linked([dep, up, off], dep, off)
+    assert _linked([dep, up, off], dep, off, gate=False)
+
+
+def test_an_incident_is_caused_only_by_the_alert_its_page_names():
+    lat = sig("lat", "metric_anomaly", "svc", 0)
+    named, other = sig("named", "alert", "svc", 2), sig("other", "alert", "svc", 3)
+    inc = sig("inc", "incident", "other", 5, opened_by=("named",))
+    signals = [lat, named, other, inc]
+    for gate in (True, False):
+        assert {a for a, _ in candidate_links(signals, EDGES, gate)[inc]} == {named}
+    unpaged = sig("unpaged", "incident", "svc", 5)
+    assert unpaged not in candidate_links([lat, named, unpaged], EDGES)
+
+
+def test_a_change_landing_after_the_cascade_began_is_explained_away():
+    cause = sig("cause", "config_change", "svc", -2)
+    first = sig("first", "metric_anomaly", "svc", 0)
+    mid = sig("mid", "metric_anomaly", "mid", 2)
+    late = sig("late", "experiment", "mid", 3)
+    effect = sig("effect", "log_error", "edge", 6)
+    signals = [cause, first, mid, late, effect]
+    assert _linked(signals, mid, effect) and not _linked(signals, late, effect)
+    assert _linked(signals, late, effect, gate=False)
+    early = sig("early", "experiment", "mid", 1)
+    assert _linked([early, mid, effect], early, effect)
+
+
+def test_topology_and_explaining_away_switch_independently():
+    cause = sig("cause", "config_change", "svc", -2)
+    first = sig("first", "metric_anomaly", "svc", 0)
+    late = sig("late", "experiment", "svc", 3)
+    effect = sig("effect", "log_error", "edge", 6)
+    off = sig("off", "log_error", "other", 6)
+    signals = [cause, first, late, effect, off]
+
+    def linked(a, b, **switches):
+        return a in {x for x, _ in candidate_links(signals, EDGES, **switches).get(b, ())}
+    assert not linked(late, effect) and not linked(first, off)
+    assert linked(first, off, topology_gate=False) and not linked(late, effect, topology_gate=False)
+    assert linked(late, effect, explain_away=False) and not linked(first, off, explain_away=False)
+    assert linked(late, effect, gate=False) and linked(first, off, gate=False)
+
+
+def test_an_unexplained_blip_before_a_change_does_not_explain_it_away():
+    blip = sig("blip", "metric_anomaly", "svc", -1)            # no change behind it
+    cfg = sig("cfg", "config_change", "svc", 0)
+    lat = sig("lat", "log_error", "svc", 3)
+    effect = sig("effect", "metric_anomaly", "edge", 5)
+    blip2 = sig("blip2", "log_error", "mid", 2)
+    signals = [blip, blip2, cfg, lat, effect]
+    assert _linked(signals, blip, lat) and _linked(signals, cfg, lat)
+    assert _linked(signals, cfg, effect)
+
+
+def test_order_is_read_on_the_detectors_minute_grid():
+    dep = sig("dep", "deployment", "svc", 0.5)                 # 22:00:30
+    spike = sig("spike", "log_error", "svc", 0)                # its own minute, floored to 22:00
+    lat = sig("lat", "metric_anomaly", "svc", 0)               # same minute as the spike
+    asg = sig("asg", "autoscaling", "svc", 0.5)
+    signals = [dep, spike, lat, asg]
+    assert _linked(signals, dep, spike) and pair_score(dep, spike, 0.9) == pytest.approx(0.9)
+    assert not _linked(signals, lat, spike) and not _linked(signals, spike, lat)
+    assert _linked(signals, asg, lat) and not _linked(signals, lat, asg)
+    later = sig("later", "log_error", "svc", 1.2)
+    assert _linked(signals + [later], lat, later)
+    alert, inc = sig("alert", "alert", "svc", 1.5), sig("inc", "incident", "svc", 1.5,
+                                                         opened_by=("alert",))
+    assert not _linked([alert, inc], alert, inc)                # exact times: strictly earlier
+
+
+def test_a_cascade_explains_a_change_away_only_from_an_earlier_minute():
+    root = sig("root", "config_change", "svc", -3)
+    first = sig("first", "metric_anomaly", "svc", 0)
+    effect = sig("effect", "log_error", "edge", 4)
+    same = sig("same", "deployment", "svc", 0.5)               # lands in the cascade's first minute
+    late = sig("late", "deployment", "svc", 1)
+    signals = [root, first, effect, same, late]
+    assert _linked(signals, same, effect)
+    assert not _linked(signals, late, effect)
+
+
+def test_roles_people_make_changes_alerts_open_incidents_and_a_condition_does_not_cause_itself():
+    m1, m2 = sig("m1", "metric_anomaly", "svc", 0), sig("m2", "metric_anomaly", "svc", 2)
+    dep = sig("dep", "deployment", "svc", 3)
+    alert = sig("alert", "alert", "svc", 4)
+    inc = sig("inc", "incident", "svc", 5, opened_by=("alert",))
+    later = sig("later", "log_error", "svc", 6)
+    signals = [m1, m2, dep, alert, inc, later]
+    assert not _linked(signals, m1, m2)
+    assert not _linked(signals, m2, dep)
+    assert _linked(signals, alert, inc) and not _linked(signals, alert, later)
+    assert not _linked(signals, inc, later)
+
+
+def test_chains_run_from_a_source_one_per_root_ranked_and_cut_at_the_threshold():
+    cfg = sig("cfg", "config_change", "svc", 0)
+    scale = sig("scale", "autoscaling", "svc", 2)
+    lat = sig("lat", "metric_anomaly", "svc", 4)
+    alert = sig("alert", "alert", "edge", 6)
+    inc = sig("inc", "incident", "edge", 8, opened_by=("alert",))
+    weak = sig("weak", "commit", None, 1)
+    chains = correlate([cfg, scale, lat, alert, inc, weak], EDGES, "urn:inc")
+    assert [[s.uri for s in c.links] for c in chains] == [
+        ["urn:cfg", "urn:scale", "urn:lat", "urn:alert", "urn:inc"]]
+    assert chains[0].confidence == pytest.approx(
+        (pair_score(cfg, scale, 0.95) * pair_score(scale, lat, 0.85)
+         * pair_score(lat, alert, 0.9) * pair_score(alert, inc, 0.95)) ** 0.25)
+
+
+def test_a_change_landing_inside_a_condition_already_under_way_roots_no_chain():
+    # v-bad-deploy at 0.5 scale (full scale ranks the experiment second at 0.622): the
+    # deploy's lolomo errors begin at 17:30; the experiment lands at 17:33 on the
+    # allocator lolomo calls, next to a second lolomo error pattern of that condition.
+    edges = [("edge", "hg"), ("hg", "lolomo"), ("lolomo", "alloc")]
+    signals = [
+        sig("dep", "deployment", "lolomo", 0),
+        sig("log1", "log_error", "lolomo", 0, 0.929),
+        sig("m1", "metric_anomaly", "lolomo", 3, 0.988),
+        sig("exp", "experiment", "alloc", 3),
+        sig("log2", "log_error", "lolomo", 3, 0.885),
+        sig("m2", "metric_anomaly", "lolomo", 5, 0.973),
+        sig("mh", "metric_anomaly", "hg", 5, 0.904),
+        sig("lh", "log_error", "hg", 6, 0.924),
+        sig("mh2", "metric_anomaly", "hg", 10, 0.735),
+        sig("me", "metric_anomaly", "edge", 15, 0.944),
+        sig("alert", "alert", "edge", 20.5),
+        sig("inc", "incident", "edge", 24.5, opened_by=("alert",)),
+    ]
+    assert [c.links[0].uri for c in correlate(signals, edges, "urn:inc")] == ["urn:dep"]
+
+
+def test_a_change_that_misses_the_origin_of_a_cascade_already_seeded_roots_no_chain():
+    # v-hot-partition: the deploy's own warm-up reaches the edge on a stronger first hop,
+    # but the config change seeded the cascade's origin, which the deploy precedes and
+    # cannot reach. The config is not asked to explain the later deploy's own blip.
+    signals = [
+        sig("cfg", "config_change", "svc", 0),
+        sig("lat", "metric_anomaly", "svc", 5),
+        sig("dep", "deployment", "other", 4),
+        sig("blip", "log_error", "other", 4),
+        sig("mid", "metric_anomaly", "mid", 7),
+        sig("edge", "metric_anomaly", "edge", 9),
+        sig("alert", "alert", "edge", 12),
+        sig("inc", "incident", "edge", 14, opened_by=("alert",)),
+    ]
+    assert [c.links[0].uri for c in correlate(signals, EDGES, "urn:inc")] == ["urn:cfg"]
+    assert "urn:dep" in {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc",
+                                                          explain_away=False)}
+
+
+def test_a_chain_under_the_cut_is_returned_when_the_cut_is_lowered():
+    cfg = sig("cfg", "config_change", "svc", 0)
+    lat = sig("lat", "metric_anomaly", "svc", 4, sev=0.0)
+    alert = sig("alert", "alert", "edge", 9, sev=0.0)
+    inc = sig("inc", "incident", "edge", 9.5, opened_by=("alert",))
+    signals = [cfg, lat, alert, inc]
+    assert correlate(signals, EDGES, "urn:inc") == []
+    (weak,) = correlate(signals, EDGES, "urn:inc", min_confidence=0.0)
+    assert weak.links[0] is cfg and weak.confidence < 0.6
+
+
+def test_a_wider_beam_finds_the_roots_a_narrow_one_drops():
+    kinds = ("deployment", "config_change", "commit", "experiment")
+    roots = [sig(f"r{i}", kinds[i % 4], "svc", -0.1 * i) for i in range(4)]
+    alert = sig("alert", "alert", "edge", 8)
+    inc = sig("inc", "incident", "edge", 8.5, opened_by=("alert",))
+    mids = [sig(f"m{i}", "metric_anomaly", "svc", 1 + 0.01 * i, sev=1 - 0.05 * i) for i in range(4)]
+    signals = [*roots, *mids, alert, inc]
+    narrow = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=1)}
+    wide = {c.links[0].uri for c in correlate(signals, EDGES, "urn:inc", False, beam_width=80)}
+    assert narrow < wide and len(wide) == 4
+
+
+def test_a_signal_whose_every_cause_was_explained_away_has_no_cause_and_is_no_crash():
+    """An onset of a condition already under way takes no cause from a later change. With that
+    change its only candidate, the signal is left with none; the ablations still rank."""
+    cfg = sig("cfg", "config_change", "svc", 0)
+    first = sig("first", "log_error", "svc", 1)
+    later = sig("later", "deployment", "svc", 4)
+    again = sig("again", "log_error", "svc", 10.5)
+    alert = sig("alert", "alert", "edge", 12)
+    inc = sig("inc", "incident", "edge", 13, opened_by=("alert",))
+    signals = [cfg, first, later, again, alert, inc]
+    assert candidate_links(signals, EDGES).get(again) == []
+    chains = correlate(signals, EDGES, "urn:inc", min_confidence=0.0)
+    assert [c.links[0].uri for c in chains] == ["urn:later"]

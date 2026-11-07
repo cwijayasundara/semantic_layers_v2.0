@@ -1,0 +1,17 @@
+{
+  "question": "Which teams own the applications that paged on-call between the window start and the as_of cutoff?",
+  "vars": [
+    "app",
+    "team"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/edge-gateway>",
+      "team": "Team Edge"
+    },
+    {
+      "app": "<https://kg.local/app/application/homepage-graphql>",
+      "team": "Team Discovery"
+    }
+  ]
+}

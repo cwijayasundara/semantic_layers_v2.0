@@ -1,0 +1,22 @@
+# Which team owns each application on the highest-confidence causal chain explaining the live incident?
+# requires: catalog, alerts_incidents, correlation
+PREFIX ops:  <https://kg.local/ops#>
+PREFIX team: <https://kg.local/team#>
+PREFIX inc:  <https://kg.local/inc#>
+PREFIX chat: <https://kg.local/chat#>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX xsd:  <http://www.w3.org/2001/XMLSchema#>
+PREFIX apps: <https://kg.local/app/application/>
+SELECT DISTINCT ?app ?team WHERE {
+  {
+    SELECT ?chain WHERE {
+      ?chain a ops:CausalChain ; ops:explains ?incident ; ops:confidence ?c .
+      ?incident ops:atTime ?t .
+      FILTER(?t >= "2026-10-14T19:00:00Z"^^xsd:dateTime && ?t < "2026-10-15T01:00:00Z"^^xsd:dateTime)
+    } ORDER BY DESC(?c) LIMIT 1
+  }
+  ?chain ops:hasLink/ops:onApplication ?app .
+  ?app ops:ownedBy/rdfs:label ?team .
+}

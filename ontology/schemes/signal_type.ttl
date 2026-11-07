@@ -1,0 +1,103 @@
+# SKOS concept scheme: Signal type. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/ops/signal_type/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/ops/scheme/signal_type> a skos:ConceptScheme ;
+    skos:prefLabel "Signal type"@en ;
+    rdfs:comment "The 13 correlation signal types (SIGNAL_TYPES, ruling R2), matching the post's 13." ;
+    skos:hasTopConcept c:log_error, c:metric_anomaly, c:slow_trace, c:failed_trace, c:alert, c:incident, c:deployment, c:config_change, c:experiment, c:autoscaling, c:commit, c:e2e_bottleneck, c:error_pattern .
+
+c:log_error a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "log_error" ;
+    skos:prefLabel "log error"@en ;
+    skos:definition "An error log pattern spike."@en .
+
+c:metric_anomaly a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "metric_anomaly" ;
+    skos:prefLabel "metric anomaly"@en ;
+    skos:definition "An anomaly on a metric series."@en .
+
+c:slow_trace a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "slow_trace" ;
+    skos:prefLabel "slow trace"@en ;
+    skos:definition "Elevated latency on a trace edge."@en .
+
+c:failed_trace a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "failed_trace" ;
+    skos:prefLabel "failed trace"@en ;
+    skos:definition "Elevated errors on a trace edge."@en .
+
+c:alert a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "alert" ;
+    skos:prefLabel "alert"@en ;
+    skos:definition "An alert firing."@en .
+
+c:incident a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "incident" ;
+    skos:prefLabel "incident"@en ;
+    skos:definition "An incident opened."@en .
+
+c:deployment a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "deployment" ;
+    skos:prefLabel "deployment"@en ;
+    skos:definition "A deployment or client release."@en .
+
+c:config_change a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "config_change" ;
+    skos:prefLabel "config change"@en ;
+    skos:definition "A dynamic property change."@en .
+
+c:experiment a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "experiment" ;
+    skos:prefLabel "experiment"@en ;
+    skos:definition "An experiment allocation change."@en .
+
+c:autoscaling a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "autoscaling" ;
+    skos:prefLabel "autoscaling"@en ;
+    skos:definition "An autoscaling event."@en .
+
+c:commit a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "commit" ;
+    skos:prefLabel "commit"@en ;
+    skos:definition "A source control commit."@en .
+
+c:e2e_bottleneck a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "e2e_bottleneck" ;
+    skos:prefLabel "end-to-end bottleneck"@en ;
+    skos:definition "The critical-path bottleneck of an end-to-end request."@en .
+
+c:error_pattern a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/signal_type> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/signal_type> ;
+    skos:notation "error_pattern" ;
+    skos:prefLabel "error pattern"@en ;
+    skos:definition "A recurring error pattern (chronic, not a spike)."@en .

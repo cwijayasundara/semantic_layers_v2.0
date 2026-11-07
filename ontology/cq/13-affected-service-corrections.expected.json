@@ -1,0 +1,15 @@
+{
+  "question": "How was the live incident's affected service corrected, from which previous value to which current one?",
+  "vars": [
+    "incidentId",
+    "previous",
+    "current"
+  ],
+  "rows": [
+    {
+      "incidentId": "INC-5377",
+      "previous": "<https://kg.local/app/application/api-gateway>",
+      "current": "<https://kg.local/app/application/homepage-graphql>"
+    }
+  ]
+}

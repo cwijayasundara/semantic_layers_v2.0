@@ -1,0 +1,50 @@
+{
+  "question": "What changed in the downstream dependency closure of homepage-graphql in the 40 minutes before the 15:20 PT TTR regression?",
+  "vars": [
+    "change",
+    "kind",
+    "app"
+  ],
+  "rows": [
+    {
+      "change": "<https://kg.local/chg/experiment_allocation/hero/alloc-8ba292395c>",
+      "kind": "experiment_allocation",
+      "app": "<https://kg.local/app/application/row-ranker>"
+    },
+    {
+      "change": "<https://kg.local/chg/config_change/hero/fpc-3be29b76c7f9>",
+      "kind": "config_change",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/04094b3a-ea0e-7839-2e00-f1c216d421f6>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/0edf7fa4-6f6b-981f-db42-6bb3c09f169e>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/5b4aa191-4392-fc3c-9bf1-68515bc056cf>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/6a487e8e-4c99-a224-55ad-24d563909f67>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/b9653116-19a1-ef6f-1046-404aa6e78aab>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    },
+    {
+      "change": "<https://kg.local/chg/scaling/hero/d59883d0-de5d-4f74-b89e-b875b9351adf>",
+      "kind": "scaling",
+      "app": "<https://kg.local/app/application/title-metadata-svc>"
+    }
+  ]
+}

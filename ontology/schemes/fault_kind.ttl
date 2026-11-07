@@ -1,0 +1,54 @@
+# SKOS concept scheme: Fault kind. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/ops/fault_kind/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/ops/scheme/fault_kind> a skos:ConceptScheme ;
+    skos:prefLabel "Fault kind"@en ;
+    rdfs:comment "Root-cause fault kinds of the scenario model (RCAEval-style menu). The model's 'none' is the absence of a fault, not a concept." ;
+    skos:hasTopConcept c:capacity_reduction, c:bad_deploy, c:cache_eviction_storm, c:db_hot_partition, c:cert_expiry, c:retry_storm .
+
+c:capacity_reduction a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "capacity_reduction" ;
+    skos:prefLabel "Capacity reduction"@en ;
+    skos:definition "An application's serving capacity was cut (for example autoscaler minimum lowered)."@en .
+
+c:bad_deploy a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "bad_deploy" ;
+    skos:prefLabel "Bad deploy"@en ;
+    skos:definition "A deployment introduced a defect."@en .
+
+c:cache_eviction_storm a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "cache_eviction_storm" ;
+    skos:prefLabel "Cache eviction storm"@en ;
+    skos:definition "Mass cache eviction pushed load onto backends."@en .
+
+c:db_hot_partition a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "db_hot_partition" ;
+    skos:prefLabel "DB hot partition"@en ;
+    skos:definition "A database partition became a hotspot."@en .
+
+c:cert_expiry a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "cert_expiry" ;
+    skos:prefLabel "Certificate expiry"@en ;
+    skos:definition "An expired certificate broke TLS connections."@en .
+
+c:retry_storm a skos:Concept ;
+    skos:inScheme <https://kg.local/ops/scheme/fault_kind> ;
+    skos:topConceptOf <https://kg.local/ops/scheme/fault_kind> ;
+    skos:notation "retry_storm" ;
+    skos:prefLabel "Retry storm"@en ;
+    skos:definition "Synchronized client retries amplified load."@en .

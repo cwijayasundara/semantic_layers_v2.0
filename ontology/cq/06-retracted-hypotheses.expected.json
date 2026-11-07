@@ -1,0 +1,15 @@
+{
+  "question": "Which applications did responders explicitly retract an earlier claim about, between the window start and the as_of cutoff?",
+  "vars": [
+    "app"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/client-android>"
+    },
+    {
+      "app": "<https://kg.local/app/application/row-ranker>"
+    }
+  ],
+  "derived_from": "hero seed 7 scale 1 manifest"
+}

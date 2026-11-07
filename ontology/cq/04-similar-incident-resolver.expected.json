@@ -1,0 +1,13 @@
+{
+  "question": "Which engineer resolved an incident similar to this one last quarter, and which application did it affect?",
+  "vars": [
+    "handle",
+    "pastApp"
+  ],
+  "rows": [
+    {
+      "handle": "priya.nair",
+      "pastApp": "<https://kg.local/app/application/lolomo-svc>"
+    }
+  ]
+}

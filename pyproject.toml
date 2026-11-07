@@ -1,0 +1,41 @@
+[project]
+name = "e2ekg"
+version = "0.1.0"
+description = "Ontology-driven observability knowledge graph prototype"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents==0.7.34",
+    "drain3>=0.9.11",
+    "duckdb>=2.0.0",
+    "langchain-fireworks>=1.7.2",
+    "numpy>=2.5.4",
+    "polars>=2.1.0",
+    "pyarrow>=26.0.1",
+    "pydantic>=2.14.3",
+    "pyoxigraph>=0.5.13",
+    "pyshacl>=0.40.2",
+    "pyyaml>=6.0.3",
+    "rapidfuzz>=3.14.6",
+    "rdflib>=7.6.0",
+]
+
+[project.scripts]
+e2ekg = "e2ekg.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not live and not slow'"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+    "live: hits Fireworks (skipped unless FIREWORKS_API_KEY is set)",
+    "slow: large-volume tests excluded by default",
+]

@@ -1,0 +1,25 @@
+{
+  "question": "Which applications own a pool-exhaustion or timeout log pattern that spiked between the window start and the as_of cutoff?",
+  "vars": [
+    "app",
+    "category"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/edge-gateway>",
+      "category": "timeout"
+    },
+    {
+      "app": "<https://kg.local/app/application/lolomo-svc>",
+      "category": "timeout"
+    },
+    {
+      "app": "<https://kg.local/app/application/row-ranker>",
+      "category": "timeout"
+    },
+    {
+      "app": "<https://kg.local/app/application/title-batch-loader>",
+      "category": "pool_exhaustion"
+    }
+  ]
+}

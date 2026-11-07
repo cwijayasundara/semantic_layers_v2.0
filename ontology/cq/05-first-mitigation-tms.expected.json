@@ -1,0 +1,15 @@
+{
+  "question": "Who first proposed a mitigation on title-metadata-svc during the incident, when, and did it hold?",
+  "vars": [
+    "handle",
+    "at",
+    "held"
+  ],
+  "rows": [
+    {
+      "handle": "marco.rossi",
+      "at": "2026-10-14T23:00:30.986921Z",
+      "held": "false"
+    }
+  ]
+}

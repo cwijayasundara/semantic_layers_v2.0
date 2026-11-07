@@ -1,0 +1,33 @@
+# Proposal for error_templates
+# Covers "Fallback served for <*>" and "Fallback served for <*> <*>", where a degraded/fallback response replaces the primary result wholesale — distinct from partial_response, which is a normal response with some fields/rows failed.
+# example: Fallback served for <*>
+# example: Fallback served for <*> <*>
+
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix skos:  <http://www.w3.org/2004/02/skos/core#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix ops: <https://kg.local/ops#> .
+@prefix app: <https://kg.local/app#> .
+@prefix team: <https://kg.local/team#> .
+@prefix infra: <https://kg.local/infra#> .
+@prefix chg: <https://kg.local/chg#> .
+@prefix exp: <https://kg.local/exp#> .
+@prefix met: <https://kg.local/met#> .
+@prefix log: <https://kg.local/log#> .
+@prefix trc: <https://kg.local/trc#> .
+@prefix alrt: <https://kg.local/alrt#> .
+@prefix inc: <https://kg.local/inc#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix ecat:  <https://kg.local/log/error_category/> .
+@prefix ckind: <https://kg.local/chg/change_kind/> .
+
+ecat:fallback_served a skos:Concept ;
+    skos:inScheme <https://kg.local/log/scheme/error_category> ;
+    skos:topConceptOf <https://kg.local/log/scheme/error_category> ;
+    skos:notation "fallback_served" ;
+    skos:prefLabel "Fallback served"@en ;
+    skos:definition "A fallback or degraded response was served in place of the primary result."@en .
+<https://kg.local/log/scheme/error_category> skos:hasTopConcept ecat:fallback_served .

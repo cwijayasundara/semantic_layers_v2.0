@@ -1,0 +1,110 @@
+# Task 12 extension to the core ontology. core.ttl is not edited; these are the
+# few terms the harvest enrichers needed that core.ttl does not define. Each is
+# a small, additive term in an existing namespace. The harvest loads this file
+# into the ontology graph next to core.ttl and the SKOS schemes, and SHACL runs
+# with it mixed in (so trc:TraceEdge instances are checked as ops:Signal).
+
+@prefix ops:   <https://kg.local/ops#> .
+@prefix trc:   <https://kg.local/trc#> .
+@prefix met:   <https://kg.local/met#> .
+@prefix log:   <https://kg.local/log#> .
+@prefix chg:   <https://kg.local/chg#> .
+@prefix exp:   <https://kg.local/exp#> .
+@prefix inc:   <https://kg.local/inc#> .
+@prefix owl:   <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+<https://kg.local/ontology/extensions/harvest> a owl:Ontology ;
+    rdfs:label "e2ekg harvest extension" ;
+    rdfs:comment "Terms added by Task 12 (enrichers) without editing core.ttl." ;
+    owl:imports <https://kg.local/ontology/core> ;
+    owl:versionInfo "0.1.0" .
+
+# Why: core.ttl has ops:TraceEdgeFingerprint for the anomalous windows of an edge
+# (slow_trace / failed_trace, exactly one signal type each) but no node for the
+# edge's ordinary traffic. Without one, spans outside an anomalous window
+# (including evidence spans) would be unreachable from the graph. trc:TraceEdge is
+# to TraceEdgeFingerprint what ops:MetricSeries is to ops:Anomaly: a baseline
+# aggregate with no signal type of its own.
+trc:TraceEdge a owl:Class ; rdfs:subClassOf ops:Signal ;
+    rdfs:label "Trace edge" ;
+    rdfs:comment "Every span of one caller to callee edge over the window (root and in-process edges included), with latency and error statistics. ops:onApplication is the callee, trc:caller the caller (absent for root and orphan spans). Its ops:rawSelector values together select exactly ops:count span rows." .
+
+# Why: core.ttl gives a fingerprint its callee (ops:onApplication) but no caller.
+trc:caller a owl:ObjectProperty ; rdfs:range ops:Application ;
+    rdfs:label "caller" ;
+    rdfs:comment "The calling application of a trace edge or trace edge fingerprint." .
+
+trc:onEdge a owl:ObjectProperty ; rdfs:domain ops:TraceEdgeFingerprint ; rdfs:range trc:TraceEdge ;
+    rdfs:label "on edge" ;
+    rdfs:comment "The trace edge an anomalous window was detected on." .
+
+trc:p50Ms a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:label "p50 ms" ; rdfs:comment "Median span duration in milliseconds, from per-minute medians: on a trc:TraceEdge their median over the window (the edge's typical latency), on an ops:TraceEdgeFingerprint their peak inside its window." .
+trc:p99Ms a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:label "p99 ms" ; rdfs:comment "Peak per-minute 99th percentile span duration inside a fingerprint's window, in milliseconds." .
+trc:errorRate a owl:DatatypeProperty ; rdfs:range xsd:decimal ;
+    rdfs:label "error rate" ; rdfs:comment "Share of the node's spans with status ERROR, in [0, 1]." .
+
+# Why: ops:magnitude is unsigned in practice; a latency drop and a rise are different facts.
+met:direction a owl:DatatypeProperty ; rdfs:domain ops:Anomaly ; rdfs:range xsd:string ;
+    rdfs:label "direction" ; rdfs:comment "\"up\" or \"down\": the side of the baseline the anomaly is on." .
+
+# Why: access-log templates (nginx "POST <*> <*>") fold the HTTP status into a
+# variable, so a 504 burst is invisible as its own pattern. The logs enricher
+# refines such a template by status; the refined pattern points at its template.
+log:refines a owl:ObjectProperty ; rdfs:domain ops:LogPattern ; rdfs:range ops:LogPattern ;
+    rdfs:label "refines" ;
+    rdfs:comment "A status-refined access-log pattern's parent template. The refined pattern's ops:rawSelector is the parent's (a superset: selectors key on the template, not the status); its ops:count is the refined row count." .
+log:httpStatus a owl:DatatypeProperty ; rdfs:domain ops:LogPattern ; rdfs:range xsd:integer ;
+    rdfs:label "HTTP status" ; rdfs:comment "The HTTP status of a status-refined access-log pattern." .
+
+# Why: ops:affects and ops:severity hold an incident's LATEST values and
+# inc:previouslyAffected the superseded ones, untimed, so "what was the affected
+# service at 23:00?" had no answer. A version per incident.io record keeps each
+# statement with its own time; the incident as known at t is its latest version
+# at or before t (R34). ops:atTime, ops:severity and ops:rawSelector apply as usual.
+inc:IncidentVersion a owl:Class ;
+    rdfs:label "Incident version" ;
+    rdfs:comment "One incident.io record of an incident (created, updated, resolved): ops:atTime the record's time, ops:severity and inc:affectedService as that record states them, ops:rawSelector the record." .
+inc:versionOf a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:range ops:Incident ;
+    rdfs:label "version of" ; rdfs:comment "The incident a version describes." .
+inc:affectedService a owl:ObjectProperty ; rdfs:domain inc:IncidentVersion ; rdfs:range ops:Application ;
+    rdfs:label "affected service" ; rdfs:comment "An affected service the version's record lists." .
+
+# Why: core.ttl has ops:forAlert (Page -> Alert) but nothing tying an incident to the
+# page it was opened from, so "which alert opened this incident?" had no answer. The
+# correlation engine needs it: an incident is caused only by the alert its page names (R40).
+inc:openedBy a owl:ObjectProperty ; rdfs:domain ops:Incident ; rdfs:range ops:Page ;
+    rdfs:label "opened by" ;
+    rdfs:comment "The page an incident was opened from: the last page triggered at or before the incident was created." .
+
+# Why: core.ttl says a config change carries "old and new values" and an
+# allocation change is "of an A/B test cell", but defines no properties for
+# them; and a cancelled ASG activity is still an ops:ScalingEvent (core header)
+# that must stay distinguishable from a successful one. These keep the
+# change records' substance in the graph. Who made a change uses the standard
+# prov:wasAssociatedWith (ops:Change is a prov:Activity) pointing at an ops:Person.
+chg:status a owl:DatatypeProperty ; rdfs:domain ops:Change ; rdfs:range xsd:string ;
+    rdfs:label "status" ; rdfs:comment "Source-system status of the change record that sets ops:atTime (SUCCEEDED, Successful, Cancelled, ...)." .
+chg:version a owl:DatatypeProperty ; rdfs:domain ops:Change ; rdfs:range xsd:string ;
+    rdfs:label "version" ; rdfs:comment "The version a deployment or client release rolled out." .
+chg:property a owl:DatatypeProperty ; rdfs:domain ops:ConfigChange ; rdfs:range xsd:string ;
+    rdfs:label "property" ; rdfs:comment "The dynamic property name a config change set." .
+chg:oldValue a owl:DatatypeProperty ; rdfs:domain ops:ConfigChange ; rdfs:range xsd:string ;
+    rdfs:label "old value" ; rdfs:comment "The property value before the change, as written." .
+chg:newValue a owl:DatatypeProperty ; rdfs:domain ops:ConfigChange ; rdfs:range xsd:string ;
+    rdfs:label "new value" ; rdfs:comment "The property value after the change, as written." .
+chg:previousCapacity a owl:DatatypeProperty ; rdfs:domain ops:ScalingEvent ; rdfs:range xsd:integer ;
+    rdfs:label "previous capacity" ; rdfs:comment "ASG desired capacity before the activity." .
+chg:desiredCapacity a owl:DatatypeProperty ; rdfs:domain ops:ScalingEvent ; rdfs:range xsd:integer ;
+    rdfs:label "desired capacity" ; rdfs:comment "ASG desired capacity the activity set." .
+exp:experiment a owl:DatatypeProperty ; rdfs:domain ops:ExperimentAllocation ; rdfs:range xsd:string ;
+    rdfs:label "experiment" ; rdfs:comment "The A/B test whose allocation changed." .
+exp:cell a owl:DatatypeProperty ; rdfs:domain ops:ExperimentAllocation ; rdfs:range xsd:string ;
+    rdfs:label "cell" ; rdfs:comment "The test cell whose allocation changed." .
+exp:oldAllocationPct a owl:DatatypeProperty ; rdfs:domain ops:ExperimentAllocation ; rdfs:range xsd:decimal ;
+    rdfs:label "old allocation percent" ; rdfs:comment "Cell allocation before the change, in percent." .
+exp:newAllocationPct a owl:DatatypeProperty ; rdfs:domain ops:ExperimentAllocation ; rdfs:range xsd:decimal ;
+    rdfs:label "new allocation percent" ; rdfs:comment "Cell allocation after the change, in percent." .

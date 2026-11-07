@@ -1,0 +1,47 @@
+# SKOS concept scheme: Message category. Closed: classifiers must pick one of these concepts.
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ops:  <https://kg.local/ops#> .
+@prefix chat: <https://kg.local/chat#> .
+@prefix c:    <https://kg.local/chat/message_category/> .
+@prefix sigt: <https://kg.local/ops/signal_type/> .
+
+<https://kg.local/chat/scheme/message_category> a skos:ConceptScheme ;
+    skos:prefLabel "Message category"@en ;
+    rdfs:comment "Verbatim from the post: category IN [incident, question, discussion, decision]. chat:Unclassified sits outside this scheme." ;
+    skos:hasTopConcept c:incident, c:question, c:discussion, c:decision .
+
+c:incident a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/message_category> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/message_category> ;
+    skos:notation "incident" ;
+    skos:prefLabel "incident"@en ;
+    skos:definition "The message reports or works an incident."@en .
+
+c:question a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/message_category> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/message_category> ;
+    skos:notation "question" ;
+    skos:prefLabel "question"@en ;
+    skos:definition "The message asks a question."@en .
+
+c:discussion a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/message_category> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/message_category> ;
+    skos:notation "discussion" ;
+    skos:prefLabel "discussion"@en ;
+    skos:definition "General discussion."@en .
+
+c:decision a skos:Concept ;
+    skos:inScheme <https://kg.local/chat/scheme/message_category> ;
+    skos:topConceptOf <https://kg.local/chat/scheme/message_category> ;
+    skos:notation "decision" ;
+    skos:prefLabel "decision"@en ;
+    skos:definition "The message records a decision."@en .
+
+# Outside the scheme on purpose: the fallback when LLM classification
+# fails. SHACL only allows it on messages with chat:classificationStatus "unclassified".
+chat:Unclassified a skos:Concept ;
+    skos:notation "unclassified" ;
+    skos:prefLabel "unclassified"@en ;
+    skos:definition "Classification failed or was not attempted; not a member of the message category scheme."@en .

@@ -1,0 +1,15 @@
+{
+  "question": "Which incidents affected applications owned by Team Bedrock in us-east-1?",
+  "vars": [
+    "app",
+    "severity",
+    "opened"
+  ],
+  "rows": [
+    {
+      "app": "<https://kg.local/app/application/api-gateway>",
+      "severity": "SEV1",
+      "opened": "2026-09-04T06:40:00Z"
+    }
+  ]
+}

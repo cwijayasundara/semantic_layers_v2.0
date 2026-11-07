@@ -1,0 +1,33 @@
+{
+  "question": "How many changes of each kind happened between the window start and the as_of cutoff?",
+  "vars": [
+    "kind",
+    "n"
+  ],
+  "rows": [
+    {
+      "kind": "client_release",
+      "n": "1"
+    },
+    {
+      "kind": "commit",
+      "n": "6"
+    },
+    {
+      "kind": "config_change",
+      "n": "3"
+    },
+    {
+      "kind": "deployment",
+      "n": "5"
+    },
+    {
+      "kind": "experiment_allocation",
+      "n": "1"
+    },
+    {
+      "kind": "scaling",
+      "n": "6"
+    }
+  ]
+}
