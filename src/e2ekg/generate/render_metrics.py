@@ -12,8 +12,8 @@ from e2ekg.generate.world import (
     BASE_ERROR,
     CLIENT_PLATFORM,
     World,
+    active,
     epoch,
-    ramp,
     stable_unit,
     tags,
     utc,
@@ -61,7 +61,7 @@ def _cell_b_start(w: World) -> float:
 def _retry_boost(w: World, app: str, t):
     f = w.scenario.fault
     if f.kind == "retry_storm" and any(e.callee == app for e in w.callees.get(f.target, ())):
-        return 1.0 + 2.0 * ramp(t, epoch(f.start_utc))
+        return 1.0 + 2.0 * w.fault_ramp(t, epoch(f.start_utc))
     return 1.0
 
 
@@ -99,14 +99,14 @@ def _atlas(w: World, rng) -> list[RawRecord]:
         for e in w.callees.get(a.id, ()):
             if e.pool_size is None:
                 continue
-            r = sum((ramp(t, epoch(dg.start_utc)) for dg in w.degs_of(a.id, "pool_exhaustion")),
+            r = sum((active(t, dg) for dg in w.degs_of(a.id, "pool_exhaustion")),
                     np.zeros(len(t)))
             r = np.minimum(r, 1.0)
             busy = 0.35 * w.diurnal(t, DIURNAL_AMP) * _noise(rng, len(t), 0.05)
-            active = np.minimum(e.pool_size, np.round(e.pool_size * (busy + (1 - busy) * r)))
+            in_use = np.minimum(e.pool_size, np.round(e.pool_size * (busy + (1 - busy) * r)))
             waiting = np.round(r * (150 + 60 * rng.random(len(t))))
             ptags = {**base_tags, "target": e.callee}
-            series.append(("grpc.client.pool.active", ptags, active, None))
+            series.append(("grpc.client.pool.active", ptags, in_use, None))
             series.append(("grpc.client.pool.waiting", ptags, waiting, None))
     client_at = w.client_anomaly_at()
     client_since = epoch(client_at) if client_at else None
@@ -157,7 +157,7 @@ def _prom_app(w: World, rng, app: str) -> list[RawRecord]:
             "heap": np.round(2.1e9 + 6e8 * rng.random(n)).astype(np.int64),
             "busy": 0.3 + 0.2 * rng.random(n), "wait": 150 + 60 * rng.random(n)})
     pools = [e for e in w.callees.get(app, ()) if e.pool_size is not None]
-    exhausted = np.minimum(sum((ramp(t, epoch(d.start_utc))
+    exhausted = np.minimum(sum((active(t, d)
                                 for d in w.degs_of(app, "pool_exhaustion")), np.zeros(n)), 1.0)
     steps = _scaling_steps(w, app)
     cap = _capacity(steps, t) if steps else None
@@ -187,10 +187,10 @@ def _prom_app(w: World, rng, app: str) -> list[RawRecord]:
             samples = []
             for h, lb, ph in lab:
                 x = float(exhausted[k])
-                active = e.pool_size if x > 0.5 else int(e.pool_size * ph["busy"][k])
+                in_use = e.pool_size if x > 0.5 else int(e.pool_size * ph["busy"][k])
                 waiting = round(x * float(ph["wait"][k]))
-                samples += [(h, {**lb, "target": e.callee, "state": "active"}, active),
-                            (h, {**lb, "target": e.callee, "state": "idle"}, e.pool_size - active),
+                samples += [(h, {**lb, "target": e.callee, "state": "active"}, in_use),
+                            (h, {**lb, "target": e.callee, "state": "idle"}, e.pool_size - in_use),
                             (h, {**lb, "target": e.callee, "state": "waiting"}, waiting)]
             fam("grpc_client_pool_connections", "gauge", "Client connection pool by state.",
                 samples)

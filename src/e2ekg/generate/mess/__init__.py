@@ -23,13 +23,31 @@ __all__ = ["INJECTORS", "Injector", "MessInjection", "Phase", "apply_mess"]
 
 def apply_mess(recs: Sequence[RawRecord], rng: np.random.Generator, scenario: Scenario,
                injectors: Sequence[Injector] = INJECTORS,
+               states: list[dict] | None = None,
                ) -> tuple[list[RawRecord], list[MessInjection]]:
-    out, log = list(recs), []
-    for inj in (i for i in injectors if i.phase == "structured"):
+    """`states` (optional) holds one rng state per injector, in run order. Empty,
+    it is filled with the state each injector starts from; filled, each injector
+    starts from its entry instead, so a second record list that differs only in
+    places gets the same decisions wherever an injector sees the same candidates
+    (the generator's recovery splice). Without it nothing changes."""
+    replay = bool(states)
+    out, log, k = list(recs), [], 0
+
+    def run(inj: Injector, out: list[RawRecord]) -> list[RawRecord]:
+        nonlocal k, log
+        if states is not None:
+            if replay:
+                rng.bit_generator.state = states[k]
+            else:
+                states.append(rng.bit_generator.state)
+        k += 1
         out, got = inj.apply(out, rng, scenario)
         log += got
+        return out
+
+    for inj in (i for i in injectors if i.phase == "structured"):
+        out = run(inj, out)
     out = [serialize(r) for r in out]
     for inj in (i for i in injectors if i.phase == "bytes"):
-        out, got = inj.apply(out, rng, scenario)
-        log += got
+        out = run(inj, out)
     return out, log

@@ -18,6 +18,11 @@ from e2ekg.generate.records import RawRecord
 from e2ekg.scenario.model import Scenario
 
 Phase = Literal["structured", "bytes"]
+# Tags the post-cutoff records of a fixed scenario's render while they are messed
+# next to the baseline's records (generate/run.py). An injector that places a
+# change by position inside a series (where it drifts, where it resets) places
+# it from the other records alone, so these get it where the baseline had it.
+RECOVERY_TAG = "_recovery"
 Result = tuple[list[RawRecord], list["MessInjection"]]
 
 

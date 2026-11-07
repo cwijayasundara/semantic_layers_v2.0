@@ -31,7 +31,7 @@ from e2ekg.generate.log_templates import (
     Template,
 )
 from e2ekg.generate.records import RawRecord
-from e2ekg.generate.world import World, epoch, ramp, tags, utc
+from e2ekg.generate.world import World, after_fix, epoch, ramp, recovery_rng, tags, utc
 from e2ekg.scenario.model import Scenario
 from e2ekg.scenario.propagation import Degradation
 
@@ -251,7 +251,11 @@ def _deg_line(w: World, app: str, d: Degradation, a: int, b: int, prog: float):
 
 
 def _plant_degradations(w: World, rng, app: str, hosts, planted) -> None:
+    """Lines while a degradation acts, within [start, end): the renderer rng
+    draws exactly as with no end, and lines past the end are thinned to nothing
+    over RAMP_S with the app's recovery rng."""
     ev_at = w.link_at("log_error", app)
+    rec = None
     for d in w.deg.get(app, ()):
         if d.kind not in DEG_LINE_RATE or w.is_client(app):
             continue
@@ -261,6 +265,10 @@ def _plant_degradations(w: World, rng, app: str, hosts, planted) -> None:
             t = _poisson_times(rng, w, DEG_LINE_RATE[d.kind] * ramp(m + w.step / 2, start))
             t = t[t >= start]
             ab = rng.integers(0, 2 ** 31, size=(len(t), 2))
+            if d.end_utc is not None:
+                rec = rec if rec is not None else recovery_rng(w.scenario, app)
+                keep = rec.random(len(t)) < 1.0 - ramp(t, epoch(d.end_utc))
+                t, ab = t[keep], ab[keep]
             for ti, (a, b) in zip(t.tolist(), ab.tolist()):
                 level, comp, msg, stack = _deg_line(w, app, d, a, b, float(ramp(ti, start)))
                 tg = tags("log_error") if ev_at is not None and ti >= epoch(ev_at) else frozenset()
@@ -282,10 +290,11 @@ def _plant_deploy_blips(w: World, rng, app: str, hosts, planted, ctx) -> None:
         if c.kind != "deployment" or c.app != app:
             continue
         start = epoch(c.at_utc)
+        crng = recovery_rng(w.scenario, app) if after_fix(w.scenario, c) else rng
         for h in hosts:
-            n = rng.poisson(BLIP_RATE * BLIP_S)
-            t = np.sort(start + 5 + rng.random(n) * BLIP_S)
-            for ti, (a, b) in zip(t.tolist(), rng.integers(0, 2 ** 31, (n, 2)).tolist()):
+            n = crng.poisson(BLIP_RATE * BLIP_S)
+            t = np.sort(start + 5 + crng.random(n) * BLIP_S)
+            for ti, (a, b) in zip(t.tolist(), crng.integers(0, 2 ** 31, (n, 2)).tolist()):
                 if ti >= w.t1:
                     continue
                 level, comp, text = DEPLOY_BLIP[a % len(DEPLOY_BLIP)]

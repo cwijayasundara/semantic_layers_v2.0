@@ -29,7 +29,7 @@ from e2ekg.generate.people import (
     oncall,
 )
 from e2ekg.generate.records import RawRecord
-from e2ekg.generate.world import World, mitigation_attempts, tags
+from e2ekg.generate.world import World, after_fix, mitigation_attempts, recovery_rng, tags
 from e2ekg.scenario.model import Change, Scenario
 from e2ekg.scenario.propagation import Degradation
 
@@ -141,9 +141,10 @@ def _ab(w: World, c: Change, rng) -> RawRecord:
         "allocation_id": external_id(w.scenario, c)}, w.change_tags(c))
 
 
-def _commits(w: World, rng) -> list[RawRecord]:
+def _commits(w: World, main_rng) -> list[RawRecord]:
     out = []
     for c in w.scenario.changes:
+        rng = recovery_rng(w.scenario, c.app) if after_fix(w.scenario, c) else main_rng
         if c.kind == "commit":
             out.append(_rec("events/commits.log", "gitlog", {
                 "sha": external_id(w.scenario, c),
@@ -162,8 +163,11 @@ def _commits(w: World, rng) -> list[RawRecord]:
 
 def _mitigations(w: World, rng) -> list[RawRecord]:
     out = []
-    for k, m in enumerate(mitigation_attempts(w.scenario)):
+    fix = w.fix_at
+    for k, m in enumerate(mitigation_attempts(w.scenario, include_after_fix=True)):
         who = HISTORY_HANDLES[int(rng.integers(len(HISTORY_HANDLES)))]
+        if fix is not None and m.at_utc >= fix:
+            continue  # not attempted once the fix is in; its draw is kept
         key = (w.scenario.name, "mitigation", k)
         out.append(_rec("events/asg.jsonl", "asg_jsonl", {
             "ts": m.at_utc, "app": m.app, "asg": m.asg, "activity_id": _uuid("bump", *key),
@@ -315,14 +319,15 @@ def render_events(scenario: Scenario, degradations: tuple[Degradation, ...],
     changes: list[RawRecord] = []
     ab = [_rec("events/ab_allocations.csv", "ab_csv", {"header": True})]
     for c in sorted(scenario.changes, key=lambda c: (c.at_utc, c.id)):
+        crng = recovery_rng(scenario, c.app) if after_fix(scenario, c) else rng
         if c.kind in ("deployment", "client_release"):
-            changes += _deploy(w, c, rng)
+            changes += _deploy(w, c, crng)
         elif c.kind == "config_change":
-            changes.append(_config(w, c, rng))
+            changes.append(_config(w, c, crng))
         elif c.kind == "scaling":
             changes.append(_scaling(w, c))
         elif c.kind == "experiment_allocation":
-            ab.append(_ab(w, c, rng))
+            ab.append(_ab(w, c, crng))
     changes += _mitigations(w, rng)
     alerts, pages, incs = _live(w, rng)
     alerts += _noise_alerts(w, rng)
