@@ -17,6 +17,11 @@ ONSET_DELAY_S: dict[FaultKind, int] = {
 # Cumulative lag by caller hop depth (depth 1 uses HOP_LAG_S[0], ...).
 HOP_LAG_S = (180, 150, 180, 120, 150, 120)
 LOAD_SHED_AFTER_CLIENTS_S = 60
+# Lag between the fix landing and the target recovering; callers recover later by HOP_LAG_S.
+RECOVERY_DELAY_S: dict[FaultKind, int] = {
+    "capacity_reduction": 600, "bad_deploy": 300, "cache_eviction_storm": 420,
+    "db_hot_partition": 300, "cert_expiry": 120, "retry_storm": 240, "none": 0,
+}
 CLIENT_LATENCY_MAGNITUDE = 1.5  # seconds added to TTR p90
 
 
@@ -26,6 +31,7 @@ class Degradation(BaseModel):
     start_utc: datetime
     kind: DegradationKind
     magnitude: float
+    end_utc: datetime | None = None
 
 
 def _kind_at(app: str, out_edges, depth: dict[str, int], is_root: bool) -> tuple[DegradationKind, float]:
@@ -39,7 +45,8 @@ def _kind_at(app: str, out_edges, depth: dict[str, int], is_root: bool) -> tuple
     return "timeouts", 1.0
 
 
-def propagate(fault: Fault, edges, window: Window) -> tuple[Degradation, ...]:
+def propagate(fault: Fault, edges, window: Window,
+              fixed_utc: datetime | None = None) -> tuple[Degradation, ...]:
     if fault.kind == "none" or fault.target is None:
         return ()
     onset = fault.start_utc + timedelta(seconds=ONSET_DELAY_S[fault.kind])
@@ -60,14 +67,22 @@ def propagate(fault: Fault, edges, window: Window) -> tuple[Degradation, ...]:
     def at(d: int) -> datetime:
         return onset + timedelta(seconds=sum(HOP_LAG_S[:d]))
 
-    out = [Degradation(app=AppId(fault.target), start_utc=onset, kind="latency", magnitude=2.0)]
+    def end(d: int) -> datetime | None:
+        if fixed_utc is None:
+            return None
+        return fixed_utc + timedelta(seconds=RECOVERY_DELAY_S[fault.kind]
+                                     + sum(HOP_LAG_S[:d]))
+
+    out = [Degradation(app=AppId(fault.target), start_utc=onset, kind="latency",
+                       magnitude=2.0, end_utc=end(0))]
     roots = []
     for app, d in sorted(depth.items(), key=lambda kv: (kv[1], kv[0])):
         if d == 0:
             continue
         is_root = not callers.get(app)
         kind, mag = _kind_at(app, out_edges, depth, is_root)
-        out.append(Degradation(app=AppId(app), start_utc=at(d), kind=kind, magnitude=mag))
+        out.append(Degradation(app=AppId(app), start_utc=at(d), kind=kind, magnitude=mag,
+                               end_utc=end(d)))
         if is_root:
             roots.append(app)
     # Gateways directly in front of the clients start shedding load afterwards.
@@ -75,8 +90,12 @@ def propagate(fault: Fault, edges, window: Window) -> tuple[Degradation, ...]:
         shed_at = at(depth[root]) + timedelta(seconds=LOAD_SHED_AFTER_CLIENTS_S)
         for e in out_edges[root]:
             if e.callee in depth and depth[e.callee] < depth[root]:
+                shed_end = end(depth[root])
+                if shed_end is not None:
+                    shed_end += timedelta(seconds=LOAD_SHED_AFTER_CLIENTS_S)
                 out.append(Degradation(app=AppId(e.callee), start_utc=shed_at,
-                                       kind="load_shed", magnitude=0.3))
+                                       kind="load_shed", magnitude=0.3,
+                                       end_utc=shed_end))
     seen, res = set(), []
     for x in out:
         if (x.app, x.kind) not in seen and window.start_utc <= x.start_utc < window.end_utc:

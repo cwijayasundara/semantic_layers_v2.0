@@ -55,6 +55,7 @@ class Fault(_Frozen):
     target: AppId | None
     start_utc: datetime
     trigger_change_id: str | None
+    fix_change_id: str | None = None
 
 
 class Change(_Frozen):
@@ -90,6 +91,8 @@ class AnswerKey(_Frozen):
     causal_chain: tuple[ChainLink, ...]
     red_herring_change_ids: tuple[str, ...]
     evidence_tags: tuple[str, ...]
+    fix_change_id: str | None = None
+    recovered_utc: datetime | None = None
 
 
 class PastIncident(_Frozen):
@@ -129,7 +132,8 @@ class Scenario(_Frozen):
             if ref not in known:
                 raise ValueError(f"unknown app {ref!r}")
         change_ids = {c.id for c in self.changes}
-        cids = [self.fault.trigger_change_id, self.answer_key.root_cause_change_id]
+        cids = [self.fault.trigger_change_id, self.answer_key.root_cause_change_id,
+                self.fault.fix_change_id, self.answer_key.fix_change_id]
         cids += list(self.answer_key.red_herring_change_ids)
         for cid in cids:
             if cid is not None and cid not in change_ids:
