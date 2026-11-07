@@ -104,3 +104,29 @@ def test_scorecard_endpoint(client):
     r = client.get("/api/scenarios/hero/scorecard")
     assert r.status_code == 200 and r.json()["arms"]
     assert client.get("/api/scenarios/hero/scorecard", params={"run": "nope"}).status_code == 404
+
+
+def test_case_reports_source(client):
+    assert client.get("/api/scenarios/hero/case").json()["meta"]["source"] == "eval:r1"
+
+
+def test_scorecard_default_matches_case_default(client, root):
+    import os
+    newer = root / "evals/r2"          # newer, no hero run file, scored
+    newer.mkdir()
+    (newer / "results.parquet").write_bytes((root / "evals/r1/results.parquet").read_bytes())
+    os.utime(newer, (4e9, 4e9))
+    assert client.get("/api/scenarios/hero/case").json()["meta"]["source"] == "eval:r1"
+    assert client.get("/api/scenarios/hero/scorecard").json()["run"] == "r1"
+
+
+def test_scorecard_default_unscored_404(client, root):
+    (root / "evals/r1/results.parquet").unlink()
+    r = client.get("/api/scenarios/hero/scorecard")
+    assert r.status_code == 404 and "results.parquet" in r.json()["detail"]
+
+
+def test_corrupt_meta_skips_chat_note(client, root):
+    (root / "evals/r1/meta.json").write_text("{not json")
+    r = client.get("/api/scenarios/hero/case")
+    assert r.status_code == 200 and r.json()["meta"]["chat_note"] is None

@@ -360,9 +360,11 @@ def _run_for(scenario: str, source: str = "") -> tuple[dict, Path | None]:
         return {"report": j["report"], "alert": j["alert"], "trail": j.get("trail")}, None
     if source.startswith("eval:"):
         name = source[5:]
+        if "/" in name or ".." in name or not name:
+            raise HTTPException(404, f"no saved run {name!r} for {scenario}")
         p = _evals_dir() / name
         f = p / "runs" / f"{scenario}__graph__0.json"
-        if "/" in name or ".." in name or not f.exists():
+        if not f.exists():
             raise HTTPException(404, f"no saved run {name!r} for {scenario}")
     elif source:
         raise HTTPException(404, f"unknown source {source!r}; use eval:<run> or job:<id>")
@@ -376,10 +378,11 @@ def _run_for(scenario: str, source: str = "") -> tuple[dict, Path | None]:
 
 
 def _chat_note(run_dir: Path | None) -> str | None:
-    meta = run_dir / "meta.json" if run_dir else None
-    if meta and meta.exists() and "ScriptedClient" in str(json.loads(meta.read_text()).get("chat")):
-        return SCRIPTED_CHAT_NOTE
-    return None
+    try:
+        meta = json.loads((run_dir / "meta.json").read_text()) if run_dir else {}
+        return SCRIPTED_CHAT_NOTE if "ScriptedClient" in str(meta.get("chat")) else None
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 @app.get("/api/scenarios/{scenario}/case")
@@ -388,10 +391,12 @@ def case(scenario: str, source: str = "") -> dict:
     run, run_dir = _run_for(scenario, source)
     tools = _tools(scenario, "as_of")
     try:
-        return build_case(_store(scenario, "as_of"), tools, scenario, run,
-                          chat_note=_chat_note(run_dir))
+        out = build_case(_store(scenario, "as_of"), tools, scenario, run,
+                         chat_note=_chat_note(run_dir))
     except ValueError as e:
         raise HTTPException(404, str(e))
+    out["meta"]["source"] = f"eval:{run_dir.name}" if run_dir else source
+    return out
 
 
 @app.get("/api/scenarios/{scenario}/lineage")
@@ -405,12 +410,12 @@ def lineage(scenario: str, uri: str) -> dict:
 def scorecard(scenario: str, run: str = "") -> dict:
     from e2ekg.explain.scorecard import scorecard as _scorecard
     if run:
-        p = _evals_dir() / run
-        if "/" in run or ".." in run or not (p / "results.parquet").exists():
+        if "/" in run or ".." in run:
             raise HTTPException(404, f"no scored eval run {run!r}")
+        p = _evals_dir() / run
     else:
-        runs = [r for r in _eval_runs(scenario) if (r / "results.parquet").exists()]
-        if not runs:
-            raise HTTPException(404, NO_RUN.format(s=scenario))
-        p = runs[0]
+        p = _run_for(scenario, "")[1]     # the run /case shows by default
+    if not (p / "results.parquet").exists():
+        raise HTTPException(404, f"eval run {p.name!r} has no results.parquet; score it with "
+                                 f"`uv run e2ekg eval --run-dir {p} --summarize-only`")
     return _scorecard(p, scenario)
