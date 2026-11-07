@@ -7,6 +7,7 @@ dependencies = [
     "deepagents==0.7.34",
     "drain3>=0.9.11",
     "duckdb>=2.0.0",
+    "fastapi>=0.115",
     "langchain-fireworks>=1.7.2",
     "numpy>=2.5.4",
     "polars>=2.1.0",
@@ -17,6 +18,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "rapidfuzz>=3.14.6",
     "rdflib>=7.6.0",
+    "uvicorn>=0.32",
 ]
 
 [project.scripts]
