@@ -42,6 +42,80 @@ Then open **http://localhost:3000**. The step-by-step guide below explains each 
 
 ---
 
+## Running the demo
+
+A walkthrough of about 15 minutes, built around the `hero` scenario. Do the preparation before
+the audience arrives: ingestion and the first AutoRCA run take too long to do live.
+
+### Before the demo
+
+```bash
+# 1. Fireworks key, for AutoRCA and the case view
+echo 'FIREWORKS_API_KEY=fw_...' > .env
+
+# 2. Build the stores. hero alone is enough; all 7 scenarios let you show the scorecard in full
+scripts/ingest.sh --scenario hero
+
+# 3. Save one scored run, so the case view and the scorecard have something to show
+uv run e2ekg eval --scenarios hero --runs 1 --arms graph,raw_only,engine_top,engine_no_topology
+
+# 4. Start both servers (two terminals) and check the backend
+scripts/start-backend.sh
+scripts/start-ui.sh
+curl http://127.0.0.1:8000/api/status      # "fireworks_key": true, hero in "scenarios"
+```
+
+Open http://localhost:3000. The sidebar footer should show neither `API unreachable` nor
+`AutoRCA: no Fireworks key`.
+
+### The story (1 minute)
+
+The hero scenario copies the incident in Netflix's ontology-driven observability post. Home
+screen (LOLOMO) render time p90 rises about 1.5 s at 15:30 PT. The request path has 6 hops:
+client → edge-gateway → homepage-graphql → lolomo-svc → row-ranker → title-metadata-svc.
+
+- **True root cause:** a config change lowers the `title-metadata-svc` autoscaler minimum from
+  48 to 12 instances. Evening traffic rises, `row-ranker` connection pools run out, and timeouts
+  climb back up the chain.
+- **Red herrings:** an android release 8 minutes earlier, an A/B allocation change, an
+  api-gateway deploy (the prior says "40% of SEV-2s"), a chronic `NullPointerException` in
+  artwork-svc, and edge load shedding.
+- **Messy data:** logs in UTC, PT and epoch ms; one service under 7 names (`TMS`,
+  `tms-prod-v042`, ...); about 200 Slack messages with wrong guesses that get retracted.
+
+The question for the audience: can an agent find the one real cause among all of that?
+
+### Walkthrough
+
+| # | Where | What to show |
+|---|-------|--------------|
+| 1 | **Scenarios** (`/`) | Each scenario is an RDF store with a quad count and a SHACL status. Point out the as-of cutoff: the agent only sees what was observable at alert + 30 min. |
+| 2 | **Scenario detail** (`/scenarios/hero`) | The live symptom, then the **ranked causal chains** from the correlation engine. The top chain starts at the `title-metadata-svc` config change and its autoscaling event. The changes near the alert show the red herrings competing for attention in the same window. |
+| 3 | Same page: **Run AutoRCA** | Start it here and come back later. A run takes about 2 to 5 minutes. |
+| 4 | **Ontology & taxonomy** (`/ontology`) | The OWL classes and SKOS schemes that every specialist agent writes its findings against. That is what keeps a flash model's output inside a closed contract. |
+| 5 | **SPARQL** (`/sparql`) | Run one query live, for example the changes to `title-metadata-svc`. Switch between the as-of and full stores to show the cut-off. |
+| 6 | **Case view** (`/scenarios/hero/case`) | Why the verdict is right. Show the swimlane (time × service), the suspects with computed facts next to the agent's reasons, and then click a node to follow its lineage from raw line (file, byte offset, hash) to processed row to graph node. Open the agent's trail, and finish with the after panel: failed mitigations, the fix, and the metrics recovering. |
+| 7 | **Evals** (`/evals`) and the case view scorecard | The arms side by side. `engine_no_topology` (the correlation engine without topology gating) falls for the red herrings, which shows what the graph adds. |
+| 8 | Back to step 3 | The finished live run. Open it in the case view with `?source=job:<id>`. |
+
+### Without a Fireworks key
+
+Steps 1, 2, 4 and 5 work as they are, because the causal chains come from the correlation
+engine and need no LLM. AutoRCA (step 3) is disabled. The case view (step 6) only works if
+`data/evals/` already holds a saved graph-arm run, for example one copied from a machine that
+has the key.
+
+### Tips
+
+- Keep `curl http://127.0.0.1:8000/api/status` at hand. When a page is empty, it is almost always
+  the backend.
+- A 429 from Fireworks means rate limiting. Wait a minute and run it again. Saved runs keep
+  working.
+- To show that the system isn't tuned to one story, open a variant such as `v-cert-expiry` or
+  `v-control` (where no fault exists, the agent should abstain). This needs a full ingest.
+
+---
+
 ## Step-by-step guide
 
 ### Step 1: Install the prerequisites
