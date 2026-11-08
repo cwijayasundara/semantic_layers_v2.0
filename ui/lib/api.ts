@@ -50,7 +50,21 @@ export type CaseMeta = {
   arm: string | null; seconds: number | null; model_calls: number | null; tool_counts: Record<string, number>;
   chat_note: string | null; has_trail: boolean; unattributed_notes: string[];
 };
-export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; trail: unknown | null };
+export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; trail: Trail | null };
+export type TrailStep = { i: number; at: string; tool: string; args: Record<string, unknown>; output: string };
+export type TrailFinding = { uri: string; specialist: string; app: string | null; claim: string | null; confidence: number | null; cites: string[] };
+export type Trail = { steps: TrailStep[]; findings: TrailFinding[] };
+export type ArmGroup = "agent" | "engine";
+export type ScoreArm = {
+  arm: string; group: ArmGroup; scenarios: number; top1: number | null; top3: number | null;
+  evidence_precision: number | null; trap_rate: number | null; control_fp_rate: number | null;
+};
+export type ScoreThis = { arm: string; group: ArmGroup; top1: boolean; verdict: string; root_app: string | null; trap: boolean; evidence_precision: number | null };
+export type Scorecard = { run: string; arms: ScoreArm[]; this_scenario: ScoreThis[]; notes: { evidence_precision: string; chat: string | null } };
+// `apps`/`aggregate`: the apps the points come from, and "mean" when that is several (e.g. TTR measured by the clients)
+export type AfterSeries = { name: string; app: string; apps?: string[]; aggregate?: string | null; points: [string, number][] };
+export type AfterChange = { uri: string; kind: string; app: string; at: string; what: string };
+export type After = { label: string; as_of: string; series: AfterSeries[]; changes: AfterChange[] };
 export type LineageRecord = {
   raw_id: string; file: string; offset: number; length: number; sha: string; line: string | null; ts_utc: string | null;
   processed: { table: string; ts_raw: string | null; skew_ms: number | null; tz_hint: string | null; app_method: string | null; app_confidence: number | null; template: string | null } | null;

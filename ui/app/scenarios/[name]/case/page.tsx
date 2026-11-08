@@ -2,12 +2,15 @@
 import { use, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { CaseNode, CasePayload, hhmm, useApi } from "@/lib/api";
+import { After, CaseNode, CasePayload, Scorecard as Score, TrailFinding, hhmm, useApi } from "@/lib/api";
 import { Chip, ErrBox, Spin } from "@/components/Bits";
 import type { Layers } from "@/components/case/CaseGraph";
 import { caseT0, ms } from "@/components/case/swimlane";
 import SidePanel from "@/components/case/SidePanel";
 import Toolbar from "@/components/case/Toolbar";
+import Scorecard from "@/components/case/Scorecard";
+import TrailPanel from "@/components/case/TrailPanel";
+import AfterPanel from "@/components/case/AfterPanel";
 
 // Cytoscape touches the DOM on import, so the graph renders on the client only.
 const CaseGraph = dynamic(() => import("@/components/case/CaseGraph"), { ssr: false, loading: () => <Spin what="Drawing" /> });
@@ -38,6 +41,13 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
   const [traceIdx, setTraceIdx] = useState<number | null>(null);
   const [tracing, setTracing] = useState(false);
   const [selected, setSelected] = useState<CaseNode | null>(null);
+  const [finding, setFinding] = useState<TrailFinding | null>(null);
+  const [onScreen, setOnScreen] = useState<ReadonlySet<string>>(new Set());
+  const highlight = useMemo(() => (finding ? new Set([finding.uri, ...finding.cites]) : null), [finding]);
+  // the scorecard is of the eval run the report came from; a job's case falls back to the backend default run
+  const run = m.source?.startsWith("eval:") ? m.source.slice(5) : null;
+  const score = useApi<Score>(`/scenarios/${name}/scorecard${run ? `?run=${encodeURIComponent(run)}` : ""}`);
+  const after = useApi<After>(`/scenarios/${name}/after${m.source ? `?source=${encodeURIComponent(m.source)}` : ""}`);
   const t0 = useMemo(() => caseT0(m, data.nodes), [m, data.nodes]);
   const t1 = ms(m.as_of);
   const hops = useMemo(() => data.nodes.filter((n) => n.hop != null).sort((a, b) => a.hop! - b.hop!), [data.nodes]);
@@ -78,12 +88,15 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
         <span>· as-of cut-off {hhmm(m.as_of)}</span>
         <span className="mut">· report: {m.source ?? "latest eval"}{m.arm ? ` (${m.arm} arm)` : ""}</span>
       </div>
+      {score.data && <Scorecard score={score.data} scenario={name} />}
+      {score.error && <div className="mut" style={{ marginBottom: 10 }}>Scorecard unavailable: {score.error}</div>}
       <Toolbar layout={layout} setLayout={setLayout} layers={layers} setLayers={setLayers} t0={t0} t1={t1}
         time={time} setTime={(t) => { setPlaying(false); setTime(t); }} playing={playing} onPlay={onPlay}
         tracing={tracing} onTrace={onTrace} hasChain={hops.length > 0} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 360px", gap: 12 }}>
         <div className="card" style={{ padding: 4, height: "72vh", minHeight: 560 }}>
-          <CaseGraph data={data} layout={layout} layers={layers} time={time} trace={traceIdx == null ? null : hops[traceIdx]?.hop ?? null} onSelect={select} />
+          <CaseGraph data={data} layout={layout} layers={layers} time={time} trace={traceIdx == null ? null : hops[traceIdx]?.hop ?? null}
+            highlight={highlight} onSelect={select} onVisible={setOnScreen} />
         </div>
         <div className="card" style={{ height: "72vh", minHeight: 560, overflow: "auto" }}>
           <SidePanel scenario={name} data={data} node={selected} chatOn={layers.chat} onClear={() => setSelected(null)} onSelect={select} />
@@ -99,6 +112,8 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
         <span><i style={{ background: "#b48cff", borderRadius: 2 }} />Slack claim</span>
         {layers.chat && m.chat_note && <span>· Slack layer: {m.chat_note}</span>}
       </div>
+      <TrailPanel trail={data.trail} active={finding?.uri ?? null} onFinding={setFinding} onScreen={(u) => onScreen.has(u)} />
+      <AfterPanel after={after.data} error={after.error} />
     </>
   );
 }

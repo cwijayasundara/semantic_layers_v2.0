@@ -12,7 +12,8 @@ if (!g.__caseFcose) { cytoscape.use(fcose); g.__caseFcose = true; }   // once, e
 export type Layers = { suspects: boolean; raw: boolean; chat: boolean; topology: boolean };
 export type CaseGraphProps = {
   data: CasePayload; layout: "swim" | "force"; layers: Layers;
-  time: number | null; trace: number | null; onSelect(n: CaseNode): void;
+  time: number | null; trace: number | null; highlight?: ReadonlySet<string> | null; onSelect(n: CaseNode): void;
+  onVisible?(ids: ReadonlySet<string>): void;   // the ids of the case nodes now drawn
 };
 
 const WIDTH = 1000, LANE = 44, MIN = 60_000;
@@ -179,11 +180,12 @@ function decor(data: CasePayload, frame: ReturnType<typeof swimFrame>, t0: numbe
   return out;
 }
 
-export default function CaseGraph({ data, layout, layers, time, trace, onSelect }: CaseGraphProps) {
+export default function CaseGraph({ data, layout, layers, time, trace, highlight, onSelect, onVisible }: CaseGraphProps) {
   const box = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const select = useRef(onSelect);
-  useEffect(() => { select.current = onSelect; }, [onSelect]);
+  const visible = useRef(onVisible);
+  useEffect(() => { select.current = onSelect; visible.current = onVisible; }, [onSelect, onVisible]);
   const [built, setBuilt] = useState(0);
 
   useEffect(() => {
@@ -206,6 +208,7 @@ export default function CaseGraph({ data, layout, layers, time, trace, onSelect 
     });
     cy.on("tap", "node", (ev) => { const n = byId.get(ev.target.id()); if (n) select.current(n); });
     cyRef.current = cy;
+    visible.current?.(new Set(nodes.map((n) => n.id)));
     setBuilt((b) => b + 1);
     return () => { cy.destroy(); cyRef.current = null; };
   }, [data, layout, layers]);
@@ -235,12 +238,18 @@ export default function CaseGraph({ data, layout, layers, time, trace, onSelect 
           else if (hop == null || hop > trace) { if (!n.hasClass("app")) n.addClass("dim"); }
         });
       }
+      if (highlight?.size) {   // a trail finding's cited items
+        real.forEach((n) => {
+          if (highlight.has(n.id())) { n.removeClass("dim"); n.addClass("hl"); }
+          else if (!n.hasClass("app")) n.addClass("dim");
+        });
+      }
       cy.edges().not(".decor").forEach((e) => {
         if (e.source().hasClass("faded") || e.target().hasClass("faded")) e.addClass("faded");
         else if (e.source().hasClass("dim") || e.target().hasClass("dim")) e.addClass("dim");
       });
     });
-  }, [time, trace, built]);
+  }, [time, trace, highlight, built]);
 
   return <div ref={box} style={{ width: "100%", height: "100%", minHeight: 560 }} />;
 }
