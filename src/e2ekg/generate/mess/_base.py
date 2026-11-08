@@ -18,11 +18,13 @@ from e2ekg.generate.records import RawRecord
 from e2ekg.scenario.model import Scenario
 
 Phase = Literal["structured", "bytes"]
+Origin = Literal["recovery", "baseline", "mixed"]
 # Tags the post-cutoff records of a fixed scenario's render while they are messed
 # next to the baseline's records (generate/run.py). An injector that places a
 # change by position inside a series (where it drifts, where it resets) places
 # it from the other records alone, so these get it where the baseline had it.
 RECOVERY_TAG = "_recovery"
+_ORIGIN = {True: "recovery", False: "baseline"}
 Result = tuple[list[RawRecord], list["MessInjection"]]
 
 
@@ -31,10 +33,11 @@ class MessInjection:
     injector_id: str
     rel_path: str
     detail: str
-    # Whether the record(s) it corrupted carry RECOVERY_TAG: True all, False none,
-    # None not said (a stream-wide injection) or a mix. Bookkeeping for the
-    # recovery splice, never written to the manifest.
-    on_recovery: bool | None = field(default=None, compare=False)
+    # Which records it corrupted, by RECOVERY_TAG: "recovery" (all tagged),
+    # "baseline" (none), "mixed" (records of both, e.g. an interleaved pair), or
+    # None (not stated: stream-wide, or a series/trace run over both). Bookkeeping
+    # for the recovery splice, never written to the manifest.
+    origin: Origin | None = field(default=None, compare=False)
 
 
 class Injector(Protocol):
@@ -74,12 +77,20 @@ class FnInjector:
     def eligible(self, r: RawRecord, fmts: Iterable[str] | None = None) -> bool:
         return r.source in self.sources and (fmts is None or r.fmt in fmts)
 
-    def record(self, rel_path: str, of: Iterable[RawRecord] = (), **detail: Any) -> MessInjection:
-        """`of`: the records this injection corrupted (its origin, for the splice)."""
-        tagged = {RECOVERY_TAG in r.tags for r in of}
+    def record(self, rel_path: str, of: Iterable[RawRecord] = (),
+               over: Iterable[RawRecord] = (), **detail: Any) -> MessInjection:
+        """The injection's origin, for the recovery splice: `of`, the records a
+        record-level injection corrupted (one, or a swapped pair: records of both
+        kinds make it "mixed"); `over`, the records a series- or trace-wide one
+        ran over (of both kinds, it is not stated)."""
+        of_tags = {RECOVERY_TAG in r.tags for r in of}
+        over_tags = {RECOVERY_TAG in r.tags for r in over}
+        if of_tags:
+            origin = "mixed" if len(of_tags) > 1 else _ORIGIN[of_tags.pop()]
+        else:
+            origin = _ORIGIN[over_tags.pop()] if len(over_tags) == 1 else None
         return MessInjection(self.id, rel_path, json.dumps(
-            detail, sort_keys=True, ensure_ascii=False, default=_jdefault),
-            on_recovery=tagged.pop() if len(tagged) == 1 else None)
+            detail, sort_keys=True, ensure_ascii=False, default=_jdefault), origin=origin)
 
 
 def injector(id: str, sources: Iterable[str], phase: Phase = "structured"):

@@ -246,7 +246,7 @@ def sampling(self, recs, rng, scenario):
             per_path.setdefault(recs[i].rel_path, []).append(sid)
         for p, sids in per_path.items():
             hit = [recs[i] for i, _, _ in droppable[tid] if recs[i].rel_path == p]
-            inj.append(self.record(p, hit,
+            inj.append(self.record(p, over=hit,
                                    trace_id=tid, dropped_span_ids=sids,
                                    apps=sorted({app_of(recs[i]) for i, _, _ in droppable[tid]}),
                                    reason="sampled flag ignored"))

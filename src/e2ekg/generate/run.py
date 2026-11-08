@@ -183,9 +183,10 @@ def _splice_injections(base: list[MessInjection], fixed: list[MessInjection],
                        fixed_paths: set[str]) -> list[MessInjection]:
     """The baseline's injections on records up to the cutoff and the mixed run's
     on the records the splice keeps. A mixed-run injection says which records it
-    corrupted (`on_recovery`): on fixed records it is kept, on the baseline's
-    (which the splice drops after the cutoff, and takes from the baseline run up
-    to it) it is not. One that does not say (stream-wide, or over both) goes by
+    corrupted (`origin`): on fixed records it is kept; on the baseline's (which
+    the splice drops after the cutoff, and takes from the baseline run up to it)
+    or on a pair of both (a swap whose baseline half is not written) it is not.
+    One that does not say (stream-wide, or a series or trace over both) goes by
     its time: after the cutoff it is kept; with no record time it goes with the
     run whose records its file holds (once, if both made the same one up to its
     count)."""
@@ -208,8 +209,8 @@ def _splice_injections(base: list[MessInjection], fixed: list[MessInjection],
             out.append(i)
             seen.add(key(i))
     for i in fixed:
-        if i.on_recovery is not None:
-            if i.on_recovery:
+        if i.origin is not None:
+            if i.origin == "recovery":
                 out.append(i)
             continue
         at = when(i)

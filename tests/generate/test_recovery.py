@@ -277,3 +277,39 @@ def test_manifest_lists_only_written_injections(trees):
         logs = Counter((r.rel_path, r.payload) for r in t.recs if r.source == "logs"
                        or r.rel_path.startswith("logs/"))
         assert sum(n - 1 for n in logs.values()) >= len(dup) > 0, name
+        # every listed swap is written: the later record directly before the earlier one
+        # (a pair of a baseline and a recovery record is not, its baseline half is dropped)
+        written = set()
+        by_file: dict[str, list] = {}
+        for r in t.recs:
+            by_file.setdefault(r.rel_path, []).append(r.at_utc)
+        for rel, ats in by_file.items():
+            written |= {(rel, a.isoformat(), b.isoformat())
+                        for a, b in zip(ats, ats[1:]) if a and b}
+        swaps = [(i["rel_path"], json.loads(i["detail"])) for i in t.manifest()["injections"]
+                 if i["injector_id"] == "log.interleave"]
+        assert swaps, name
+        missing = [(rel, d) for rel, d in swaps
+                   if (rel, d["at_utc_b"], d["at_utc_a"]) not in written]
+        assert not missing, (name, missing[:3])
+
+
+def test_a_swap_across_origins_is_not_listed():
+    """log.interleave over the last baseline record of a file and the first
+    recovery record: the swap is never written (the baseline half is dropped),
+    so the splice leaves it out. A series-wide injection over both is not
+    record-level and keeps the time rule."""
+    from e2ekg.generate.mess import logs
+    from e2ekg.generate.mess._base import RECOVERY_TAG
+    from e2ekg.generate.records import RawRecord
+
+    cut = _pt(16, 0)
+    base = RawRecord("logs", "logs/a.log", "json", at_utc=_pt(17, 59))
+    rec = RawRecord("logs", "logs/a.log", "json", at_utc=_pt(16, 1), tags=frozenset({RECOVERY_TAG}))
+    pair = logs.interleave.record("logs/a.log", [base, rec], idx_a=0, idx_b=1,
+                                  at_utc_a=base.at_utc, at_utc_b=rec.at_utc)
+    series = logs.interleave.record("logs/a.log", over=[base, rec], at_utc=rec.at_utc)
+    only = logs.interleave.record("logs/a.log", [rec], idx=1, at_utc=rec.at_utc)
+    assert (pair.origin, series.origin, only.origin) == ("mixed", None, "recovery")
+    kept = run._splice_injections([], [pair, series, only], cut, set(), {"logs/a.log"})
+    assert kept == [series, only]
