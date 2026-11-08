@@ -49,6 +49,8 @@ export type CaseMeta = {
   as_of: string; onset_at: string | null; summary: string | null; confidence: number | null;
   arm: string | null; seconds: number | null; model_calls: number | null; tool_counts: Record<string, number>;
   chat_note: string | null; has_trail: boolean; unattributed_notes: string[];
+  /** tool calls that failed or whose answer was cut to fit, while building this case */
+  tool_issues?: { tool: string; issue: string }[];
 };
 export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; trail: Trail | null };
 export type TrailStep = { i: number; at: string; tool: string; args: Record<string, unknown>; output: string };
@@ -68,6 +70,8 @@ export type After = { label: string; as_of: string; series: AfterSeries[]; chang
 export type LineageRecord = {
   raw_id: string; file: string; offset: number; length: number; sha: string; line: string | null; ts_utc: string | null;
   processed: { table: string; ts_raw: string | null; skew_ms: number | null; tz_hint: string | null; app_method: string | null; app_confidence: number | null; template: string | null } | null;
+  /** set when the bytes at the span do not hash to the id */
+  integrity_error?: string | null;
 };
 export type Lineage = { uri: string; graph: string | null; records: LineageRecord[] };
 

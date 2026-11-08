@@ -47,6 +47,16 @@ function Facts({ n, alertApp }: { n: CaseNode; alertApp: string }) {
 
 function Record_({ r }: { r: LineageRecord }) {
   const p = r.processed;
+  if (r.integrity_error) return (
+    <div style={{ ...box, borderColor: "var(--bad)" }}>
+      <div className="err" style={{ fontSize: 12, marginBottom: 4 }}>raw bytes failed verification: {r.integrity_error}</div>
+      <div style={kv}>
+        <span className="mut">raw file</span><span className="mono">{r.file}</span>
+        <span className="mut">byte offset</span><span className="mono">{r.offset} (+{r.length} bytes)</span>
+        <span className="mut">sha</span><span className="mono">{r.sha}</span>
+      </div>
+    </div>
+  );
   return (
     <div style={box}>
       <div style={kv}>
@@ -97,6 +107,12 @@ function Overview({ data, chatOn }: { data: CasePayload; chatOn: boolean }) {
         <div key={i} style={quote}><div className="mut" style={{ fontStyle: "normal", fontSize: 11 }}>unattributed agent note</div>{t}</div>
       ))}
       {chatOn && m.chat_note && <div className="mut" style={{ fontSize: 12, marginTop: 8 }}>Slack layer: {m.chat_note}</div>}
+      {(m.tool_issues?.length ?? 0) > 0 && (
+        <div style={{ ...box, borderColor: "var(--warn)" }}>
+          <div className="warn" style={{ fontSize: 12, fontWeight: 600 }}>⚠ this case may be incomplete: some tool calls failed or were cut to fit</div>
+          {m.tool_issues!.map((t, i) => <div key={i} className="mono" style={{ fontSize: 11 }}>{t.tool}: {t.issue}</div>)}
+        </div>
+      )}
     </>
   );
 }
@@ -121,6 +137,7 @@ export default function SidePanel({ scenario, data, node, chatOn, onClear, onSel
         })}
       </div>
       {n.missing && <div className="err" style={{ fontSize: 12 }}>Not in the as-of store: drawn from the agent&apos;s report so nothing is hidden.</div>}
+      {n.cat === "finding" && !n.missing && <div className="mut" style={{ fontSize: 12 }}>Recorded by the agent during the run (from its trail), so it is not in the as-of store and has no data time; drawn just after the latest item it cites.</div>}
       <Facts n={n} alertApp={data.meta.alert.app} />
       {n.agent_reason && <><h3 style={{ marginTop: 10 }}>Agent&apos;s reasoning</h3><div style={quote}>“{n.agent_reason}”</div></>}
       {n.discussed === false && <div style={{ ...box, color: "var(--mut)" }}>not discussed by the agent</div>}
@@ -143,7 +160,7 @@ export default function SidePanel({ scenario, data, node, chatOn, onClear, onSel
           {sources.length === 0 && <div className="mut">Cited directly by the agent as raw evidence.</div>}
           {sources.map((s) => <div key={s.id}><a href="#" onClick={(e) => { e.preventDefault(); onSelect(s); }}>{s.cat} · {s.label}</a></div>)}
         </>
-      ) : n.cat !== "app" && !n.missing && n.id.startsWith("http") ? (
+      ) : n.cat !== "app" && n.cat !== "finding" && !n.missing && n.id.startsWith("http") ? (
         <><h3 style={{ marginTop: 12 }}>Lineage: raw → processed → graph</h3><LineageView key={n.id} scenario={scenario} n={n} /></>
       ) : null}
     </>
