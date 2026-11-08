@@ -1,12 +1,16 @@
 """Raw -> processed -> graph lineage for one node: the raw lines behind it (through the
 agent's own `raw_evidence`, so the as-of cutoff holds), the processed row each parsed into,
-and the named graph the node lives in."""
+and the named graph the node lives in. With `as_of` (the tools' cutoff) the processed row is
+read through `asof.scan`, so a log line shows the template mined at the cutoff, as the as-of
+store does, not the full window's."""
 import json
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
 from e2ekg.graph.uris import BASE
+from e2ekg.preprocess import asof as _asof
 from e2ekg.rawid import RawSpan
 
 _TABLE = {"logs": "logs", "atlas": "metrics_atlas", "prom": "metrics_prom",
@@ -27,12 +31,13 @@ def _graph_tail(tools: dict, uri: str) -> str | None:
     return None
 
 
-def _processed(proc_root: Path, source: str, rid: str) -> dict | None:
+def _processed(proc_root: Path, source: str, rid: str,
+               as_of: datetime | None = None) -> dict | None:
     table = _TABLE.get(source)
     path = Path(proc_root) / f"{table}.parquet"
     if table is None or not path.exists():
         return None
-    lf = pl.scan_parquet(path)
+    lf = _asof.scan(proc_root, table, as_of)
     have = lf.collect_schema().names()
     row = lf.filter(pl.col("raw_id") == rid).select(
         [pl.col(c) if c in have else pl.lit(None).alias(c) for c in _FIELDS]).head(1).collect()
@@ -41,7 +46,8 @@ def _processed(proc_root: Path, source: str, rid: str) -> dict | None:
     return {"table": table, **row.row(0, named=True)}
 
 
-def lineage(tools: dict, proc_root: Path, uri: str, limit: int = 3) -> dict:
+def lineage(tools: dict, proc_root: Path, uri: str, limit: int = 3,
+            as_of: datetime | None = None) -> dict:
     out = tools["raw_evidence"].invoke({"uri_or_selector": uri, "limit": limit})
     items = json.loads(out) if out.startswith("[") else []
     records = []
@@ -53,5 +59,6 @@ def lineage(tools: dict, proc_root: Path, uri: str, limit: int = 3) -> dict:
         records.append({
             "raw_id": rid, "file": span.rel_path, "offset": span.offset,
             "length": span.length, "sha": rid.rsplit("|", 1)[1], "line": it["line"],
-            "ts_utc": it.get("ts"), "processed": _processed(proc_root, span.source, rid)})
+            "ts_utc": it.get("ts"),
+            "processed": _processed(proc_root, span.source, rid, as_of)})
     return {"uri": uri, "graph": _graph_tail(tools, uri), "records": records}

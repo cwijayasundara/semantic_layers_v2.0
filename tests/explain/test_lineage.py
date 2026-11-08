@@ -35,3 +35,16 @@ def test_log_spike_lineage_shows_timestamp_normalisation(live_tools):
 def test_unknown_uri_returns_no_records(live_tools):
     out = lineage(live_tools.tools, live_tools.proc, "https://kg.local/ops/finding/hero/nope")
     assert out["records"] == []
+
+
+def test_a_log_lineage_shows_the_template_mined_at_the_cutoff(live_tools):
+    """The processed row's template is the as-of view's, not the full window's."""
+    from helpers import asof_only_pattern
+
+    from e2ekg.graph.enricher import node
+    live = live_tools
+    app, tid, template, ids = asof_only_pattern(live.proc, live.as_of)
+    out = lineage(live.tools, live.proc, str(node("log", "pattern", "hero", app, tid)),
+                  as_of=live.as_of)
+    assert [r["raw_id"] for r in out["records"]] == ids[:3]
+    assert {r["processed"]["template"] for r in out["records"]} == {template}

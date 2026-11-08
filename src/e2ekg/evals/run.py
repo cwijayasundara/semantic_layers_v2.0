@@ -325,7 +325,7 @@ class _Scorer:
             store = case.store()
             view_dir = self.evals_dir / "_raw_asof" / name
             meta = view_dir.with_name(name + ".view.json")
-            graph = evidence_checker(answers, store=store, proc=case.proc)
+            graph = evidence_checker(answers, store=store, proc=case.proc, as_of=case.as_of)
             raw = evidence_checker(answers, raw=view_dir,
                                    view=json.loads(meta.read_text())["segments"]) \
                 if meta.is_file() else graph

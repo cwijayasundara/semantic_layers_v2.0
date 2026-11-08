@@ -20,6 +20,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -87,12 +88,14 @@ def score(report: RCAReport, answers: dict,
 
 
 def evidence_checker(answers: dict, *, store=None, proc: Path | None = None,
-                     raw: Path | None = None, view: dict | None = None
-                     ) -> Callable[[str], bool]:
+                     as_of: datetime | None = None, raw: Path | None = None,
+                     view: dict | None = None) -> Callable[[str], bool]:
     """Does one cited evidence item reach a record of the answer key's evidence?
       * a raw record id of the key: yes;
-      * a kg.local URI, with `store` and `proc` (the as-of store and its processed tables):
-        yes if it, or what it derives from or cites, has a raw selector or raw id of the key;
+      * a kg.local URI, with `store` and `proc` (the as-of store and its processed tables)
+        and `as_of` (the store's cutoff: its log selectors name as-of templates and resolve
+        against the lines observable then, `selector.selected_raw_ids(..., as_of=)`): yes if
+        it, or what it derives from or cites, has a raw selector or raw id of the key;
       * `path:line` or `path:a-b`, with `raw` (the raw tree the agent read, or its as-of view)
         and `view` (the view's segment map; None when `raw` is the original tree): yes if
         those lines overlap a record of the key, by byte range in the original file."""
@@ -135,7 +138,7 @@ def evidence_checker(answers: dict, *, store=None, proc: Path | None = None,
             f"SELECT DISTINCT ?v WHERE {{ <{uri}> (prov:wasDerivedFrom|ops:cites)* ?x . "
             "?x ops:rawSelector ?v }")]
         ids = {v for v in vals if not v.startswith("{")}
-        ids |= selected_raw_ids(proc, [v for v in vals if v.startswith("{")])
+        ids |= selected_raw_ids(proc, [v for v in vals if v.startswith("{")], as_of=as_of)
         return bool(ids & wanted)
 
     def check(item: str) -> bool:

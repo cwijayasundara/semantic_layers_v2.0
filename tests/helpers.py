@@ -233,3 +233,22 @@ class Harvested:
     out: Path        # the harvest output directory (store/ and harvest.ttl)
     as_of: object = None   # the cutoff of an as-of store (datetime), None for the full store
     symptom: str | None = None   # the live symptom's URI (HarvestContext.symptom)
+
+
+def asof_only_pattern(proc: Path, as_of) -> tuple[str, str, str, list[str]]:
+    """(app_uri, template_id, template, raw ids earliest first) of a log pattern that exists
+    only in the as-of view: mined over the lines before `as_of`, its template id names no
+    full-window template (the lines after the cutoff reshaped it there)."""
+    import polars as pl
+
+    from e2ekg.preprocess.logtemplates import mine_templates
+    seen = pl.read_parquet(proc / "logs.parquet", columns=["raw_id", "app_uri", "ts_utc", "msg"]
+                           ).filter(pl.col("ts_utc") < as_of)
+    mined = mine_templates(seen)
+    full = set(pl.read_parquet(proc / "derived" / "rows_logs.parquet", columns=["key"])["key"])
+    only = mined.filter(~pl.col("template_id").is_in(list(full)))
+    assert only.height, "the fixture has no template that the later lines reshape"
+    app, tid = only.select("app_uri", "template_id").unique().sort("app_uri", "template_id").row(0)
+    rows = only.filter((pl.col("app_uri") == app) & (pl.col("template_id") == tid)) \
+        .sort("ts_utc", "raw_id")
+    return app, tid, rows["template"][0], rows["raw_id"].to_list()

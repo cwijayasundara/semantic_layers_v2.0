@@ -424,8 +424,13 @@ def after(scenario: str, source: str = "") -> dict:
 @app.get("/api/scenarios/{scenario}/lineage")
 def lineage(scenario: str, uri: str) -> dict:
     from e2ekg.explain.lineage import lineage as _lineage
+    from e2ekg.preprocess.asof import live_cutoff
     _store(scenario, "as_of")
-    return _lineage(_tools(scenario, "as_of"), DATA / "processed" / scenario, uri)
+    proc = DATA / "processed" / scenario
+    tools = _tools(scenario, "as_of")
+    as_of = _harvest(scenario, "as_of").get("as_of")      # the tools' cutoff, as _tools_cached
+    return _lineage(tools, proc, uri, as_of=datetime.fromisoformat(as_of) if as_of
+                    else live_cutoff(proc).as_of)
 
 
 @app.get("/api/scenarios/{scenario}/scorecard")
