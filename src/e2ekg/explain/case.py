@@ -5,8 +5,10 @@ Computed facts (`facts`, from `candidate_evidence`) and the agent's prose (`agen
 `refuted_alternatives`) are separate fields. Nothing here reads the answer key."""
 import json
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta
 
+from e2ekg.explain.after import _changes
 from e2ekg.explain.refuted import parse_refuted
 from e2ekg.graph.store import Store
 from e2ekg.graph.uris import BASE, NS
@@ -24,20 +26,61 @@ _SKIP = {_RDF_TYPE, str(NS["ops"]["rawSelector"])}
 _APP_PREDS = [str(NS["ops"][p]) for p in ("onApplication", "changedApp")] + [str(NS["chat"]["about"])]
 _AT, _CALLER = str(NS["ops"]["atTime"]), str(NS["trc"]["caller"])
 _IRI = re.compile(r"[^\s<>\"{}|\\^`]+")
+_DEPENDS = str(NS["ops"]["dependsOn"])
+FINDING_SOURCE = "agent finding (run-time)"
 _LABEL = [str(NS["chg"]["changeId"]), "http://www.w3.org/2000/01/rdf-schema#label",
           str(NS["chat"]["quote"])]
 
 
-def _call(tools: dict, name: str, **args):
+_NOTES = ("truncated", "capped")
+
+
+def _call(tools: dict, name: str, issues: list[dict], **args):
+    """A tool's parsed answer, or None on an `error:` answer; errors and the truncation notes
+    `_fit` appends are recorded in `issues` ({tool, issue}) so the page can say what it lacks."""
     out = tools[name].invoke(args)
-    return None if out.startswith("error: ") else json.loads(out)
+    if out.startswith("error: "):
+        issues.append({"tool": name, "issue": out.removeprefix("error: ")})
+        return None
+    data = json.loads(out)
+    rows = data if isinstance(data, list) else [data]
+    for r in rows:
+        if isinstance(r, dict) and r.keys() & set(_NOTES):
+            left = ", ".join(f"{k} {r[k]}" for k in _NOTES if k in r)
+            issues.append({"tool": name, "issue": f"answer cut to fit ({left})"})
+    return data
 
 
 def _rows(out) -> list[dict]:
     """A tool's rows without the truncation notes `_fit` appends."""
-    notes = ("truncated", "capped")
-    return [{k: v for k, v in r.items() if k not in notes}
-            for r in out or [] if set(r) - set(notes)]
+    return [{k: v for k, v in r.items() if k not in _NOTES}
+            for r in out or [] if set(r) - set(_NOTES)]
+
+
+def signed_hops(store: Store, app: str) -> dict[str, int]:
+    """app -> shortest ops:dependsOn depth from `app`: positive down (what it calls), negative
+    up (its callers), 0 for the app itself; down wins for an app on both sides. The agent's
+    `dependency_closure`, uncapped (its answer is cut to fit a prompt)."""
+    down, up = defaultdict(set), defaultdict(set)
+    for r in store.query(f"SELECT DISTINCT ?a ?b WHERE {{ ?a <{_DEPENDS}> ?b }}"):
+        if r["a"].startswith(APP) and r["b"].startswith(APP):
+            a, b = r["a"][len(APP):], r["b"][len(APP):]
+            down[a].add(b)
+            up[b].add(a)
+
+    def bfs(adj: dict[str, set[str]]) -> dict[str, int]:
+        depth, frontier = {app: 0}, [app]
+        while frontier:
+            nxt = []
+            for a in frontier:
+                for b in sorted(adj[a]):
+                    if b not in depth:
+                        depth[b] = depth[a] + 1
+                        nxt.append(b)
+            frontier = nxt
+        return depth
+
+    return {a: -h for a, h in bfs(up).items()} | bfs(down)
 
 
 def _when(s: str) -> datetime:
@@ -103,14 +146,18 @@ def _node(id: str, label: str, cat: str, **kw) -> dict:
             "agent_reason": None, "facts": None, "discussed": None, "confidence": None, **kw}
 
 
-def _facts(tools: dict, alert_id: str, uris: list[str]) -> tuple[dict[str, dict], str | None]:
+def _facts(tools: dict, alert_id: str, uris: list[str],
+           issues: list[dict]) -> tuple[dict[str, dict], str | None]:
     """uri -> computed facts, and the onset time, from `candidate_evidence`; asks again for any
-    candidates the first answer had to leave out to fit its size cap."""
+    candidates the first answer had to leave out to fit its size cap (so its cut is not an
+    issue; candidates it never answers are)."""
     facts: dict[str, dict] = {}
     onset, asked = None, list(uris)
     while asked:
-        out = _call(tools, "candidate_evidence", alert_id=alert_id, candidate_uris=asked)
+        got: list[dict] = []
+        out = _call(tools, "candidate_evidence", got, alert_id=alert_id, candidate_uris=asked)
         if out is None:
+            issues += got
             break
         onset = onset or ((out["symptom"].get("onset") or {}).get("at"))
         for c in out["candidates"]:
@@ -122,6 +169,8 @@ def _facts(tools: dict, alert_id: str, uris: list[str]) -> tuple[dict[str, dict]
         answered = {c["uri"] for c in out["candidates"]}
         left = [u for u in asked if u not in answered]
         if len(left) == len(asked):
+            issues.append({"tool": "candidate_evidence",
+                           "issue": f"{len(left)} candidates left without computed facts"})
             break
         asked = left
     return facts, onset
@@ -136,17 +185,18 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
             for h in report.get("hypotheses") or []]
     top = hyps[0] if hyps else {}
     found_root = report["verdict"] == "root_cause_found"
-    found = _call(tools, "find_symptom", alert_id=run["alert"])
+    issues: list[dict] = []
+    found = _call(tools, "find_symptom", issues, alert_id=run["alert"])
     if found is None:
         raise ValueError(f"alert {run['alert']!r} is not in the as-of store")
     alert, incident = found["alert"], found["incident"]
 
-    down = _rows(_call(tools, "dependency_closure", app=alert["app"], direction="down"))
-    up = _rows(_call(tools, "dependency_closure", app=alert["app"], direction="up"))
-    hops = {r["id"]: -r["hops"] for r in up} | {r["id"]: r["hops"] for r in down}
+    # the closure and the suspect window straight from the as-of store: the tools' answers
+    # are cut to fit a prompt, and a cut closure would lose the deepest apps (and their changes)
+    hops = signed_hops(store, alert["app"])
+    down = sorted(a for a, h in hops.items() if h >= 0)
     start = _when(alert["at"]) - WINDOW
-    window = _rows(_call(tools, "changes_in_window", apps=[r["id"] for r in down],
-                         start=start.isoformat(), end=found["as_of"]))
+    window = _changes(store, down, start, _when(found["as_of"]), inclusive=True)
     what = {c["uri"]: c["what"] for c in window}
 
     refuted = parse_refuted([line for h in hyps for line in h.get("refuted_alternatives", [])],
@@ -164,12 +214,13 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
     suspects = list(dict.fromkeys([*what, *reasons]))
     named = {u for h in hyps for u in (h.get("root_cause_uri"), *h.get("chain", []),
                                        *h.get("evidence", []))} | set(reasons)
-    facts, onset = _facts(tools, alert["id"], [*suspects, *([root] if root else [])])
+    facts, onset = _facts(tools, alert["id"], [*suspects, *([root] if root else [])], issues)
 
     chat = []
     if incident:
         for kind in CHAT_KINDS:
-            chat += _rows(_call(tools, "chat_claims", channel=incident["id"], kinds=[kind]))
+            chat += _rows(_call(tools, "chat_claims", issues, channel=incident["id"],
+                                kinds=[kind]))
     trail = run.get("trail")
     findings = {f["uri"]: f for f in (trail or {}).get("findings", [])}
 
@@ -183,10 +234,13 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
     nodes: dict[str, dict] = {}
     for u in uris:
         d, cat = desc.get(u), _cat(u)
+        # a finding the agent recorded during the run lives in its run-time store, not the
+        # as-of store: drawn from the trail, not "missing"; it has no data time (`at` null)
         n = _node(u, what.get(u) or _first(d, _LABEL) or _tail(u), cat,
                   cls="/".join(sorted(d["types"])) or None if d else None,
                   app=_app_of(_first(d, _APP_PREDS)), at=_first(d, [_AT]),
-                  props=d["props"] if d else {}, graph=d and d["graph"], missing=d is None,
+                  props=d["props"] if d else {}, graph=d and d["graph"],
+                  missing=d is None and u not in findings,
                   facts=facts.get(u), agent_reason="\n".join(reasons[u]) if u in reasons else None)
         roles = n["roles"]
         if u == root:
@@ -215,7 +269,8 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
         if u in findings:
             f = findings[u]
             n["app"], n["confidence"] = f.get("app"), f.get("confidence")
-            n["props"] = {**n["props"], "claim": f.get("claim"), "specialist": f.get("specialist")}
+            n["props"] = {**n["props"], "claim": f.get("claim"),
+                          "specialist": f.get("specialist"), "source": FINDING_SOURCE}
         nodes[u] = n
     for rid in (e for e in evidence if not e.startswith(BASE + "/")):
         try:
@@ -248,10 +303,12 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
 
     signals = [n for n in nodes.values() if n["cat"] not in ("app", "raw")]
     for n in signals:
-        if n["missing"]:
+        if n["id"] not in desc:      # not in the as-of store: no raw lines behind it there
             continue
-        for r in _rows(_call(tools, "raw_evidence", uri_or_selector=n["id"], limit=3)):
-            if "raw_id" in r:
+        for r in _rows(_call(tools, "raw_evidence", issues, uri_or_selector=n["id"], limit=3)):
+            if "error" in r:
+                issues.append({"tool": "raw_evidence", "issue": f"{r['raw_id']}: {r['error']}"})
+            elif "raw_id" in r:
                 path = RawSpan.parse(r["raw_id"]).rel_path
                 nodes.setdefault(f"raw:{path}", _node(f"raw:{path}", path.rsplit("/", 1)[-1],
                                                       "raw", roles=["raw"]))
@@ -290,6 +347,7 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
             "arm": run.get("arm"), "seconds": run.get("seconds"),
             "model_calls": run.get("model_calls"), "tool_counts": run.get("tools", {}),
             "chat_note": chat_note, "has_trail": bool(trail),
-            "unattributed_notes": [r.reason for r in refuted if not r.uris]}
+            "unattributed_notes": [r.reason for r in refuted if not r.uris],
+            "tool_issues": list({json.dumps(i, sort_keys=True): i for i in issues}.values())}
     return {"meta": meta, "nodes": list(nodes.values()), "edges": list(edges.values()),
             "trail": trail}

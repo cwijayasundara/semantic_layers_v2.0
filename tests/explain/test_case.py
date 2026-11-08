@@ -3,6 +3,7 @@ import copy
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -175,9 +176,12 @@ def test_findings_enrich_from_trail(engine_run, live_tools):
          "claim": "floor removed", "confidence": 0.7, "cites": [cited]}]}
     case = _build(live_tools, run)
     node = _nodes(case)[MISSING]
-    assert (node["missing"], node["app"], node["confidence"]) == (True, "title-metadata-svc", 0.7)
+    # recorded by the agent during the run: drawn from the trail, not "missing"
+    assert (node["missing"], node["app"], node["confidence"]) == (False, "title-metadata-svc", 0.7)
     assert node["props"]["claim"] == "floor removed"
     assert node["props"]["specialist"] == "changes"
+    assert node["props"]["source"] == "agent finding (run-time)"
+    assert node["at"] is None
     assert {"id": f"cites:{MISSING}->{cited}", "source": MISSING, "target": cited,
             "kind": "cites"} in case["edges"]
     assert case["trail"] == run["trail"] and case["meta"]["has_trail"] is True
@@ -229,3 +233,67 @@ def test_never_reads_answers(engine_run, live_tools, monkeypatch):
     monkeypatch.setattr(Path, "open", guarded(Path.open))
     monkeypatch.setattr(builtins, "open", guarded(builtins.open))
     assert _build(live_tools, copy.deepcopy(engine_run))["nodes"]
+
+
+def test_signed_hops_are_uncapped():
+    """Bigger than the tool's caps (LIMIT rows per query, CAP characters per answer): every
+    app keeps its shortest signed depth."""
+    from rdflib import URIRef
+
+    from e2ekg.agent.tools import LIMIT
+    from e2ekg.explain.case import APP, signed_hops
+    from e2ekg.graph.store import Store
+    from e2ekg.graph.uris import NS
+    dep = URIRef(str(NS["ops"]["dependsOn"]))
+    n = LIMIT + 50
+    pairs = [("a0", f"m{i:03}") for i in range(n)] + [(f"m{i:03}", f"d{i:03}") for i in range(n)]
+    pairs += [("c", "a0"), ("cc", "c"), ("a0", "x"), ("x", "a0"), ("d000", "a0")]
+    store = Store(None)
+    store.add_to_graph(URIRef("https://kg.local/graph/test"),
+                       [(URIRef(APP + a), dep, URIRef(APP + b)) for a, b in pairs])
+    hops = signed_hops(store, "a0")
+    assert hops["a0"] == 0
+    assert sum(h == 1 for h in hops.values()) == n + 1          # every m, and x
+    assert sum(h == 2 for h in hops.values()) == n
+    assert (hops["c"], hops["cc"], hops["x"], hops["d000"]) == (-1, -2, 1, 2)
+
+
+def test_case_reads_the_closure_from_the_store_not_the_capped_tool(case, engine_run, live_tools):
+    """A cut `dependency_closure`/`changes_in_window` answer must not cost apps their hops
+    (the root would land in the no-path band) or the suspects their place."""
+    capped = dict(live_tools.tools)
+    for name in ("dependency_closure", "changes_in_window"):
+        capped[name] = SimpleNamespace(invoke=lambda args: '[{"truncated": 99}]')
+    other = build_case(live_tools.store, capped, "hero", engine_run)
+    assert {n["id"]: n.get("hops") for n in other["nodes"] if n["cat"] == "app"} \
+        == {n["id"]: n.get("hops") for n in case["nodes"] if n["cat"] == "app"}
+    assert {n["id"] for n in other["nodes"] if "suspect" in n["roles"]} \
+        == {n["id"] for n in case["nodes"] if "suspect" in n["roles"]}
+
+
+def test_apps_on_a_path_have_hops(case):
+    nodes = _nodes(case)
+    on_path = {nodes[u]["app"] for u in _hyp_chain(case) if nodes[u]["app"]}
+    for n in case["nodes"]:
+        for hop in (n["facts"] or {}).get("path") or []:
+            on_path |= set(hop.split("→"))
+    assert on_path
+    for a in on_path:
+        assert _app(case, a)["hops"] is not None, a
+
+
+def _hyp_chain(case):
+    return [n["id"] for n in sorted((n for n in case["nodes"] if n["hop"] is not None),
+                                    key=lambda n: n["hop"])]
+
+
+def test_tool_errors_and_cuts_are_reported(engine_run, live_tools):
+    tools = dict(live_tools.tools)
+    tools["chat_claims"] = SimpleNamespace(invoke=lambda args: "error: chat store offline")
+    case = build_case(live_tools.store, tools, "hero", engine_run)
+    assert {"tool": "chat_claims", "issue": "chat store offline"} in case["meta"]["tool_issues"]
+    assert not [n for n in case["nodes"] if n["cat"] == "chat"]
+
+
+def test_no_tool_issues_on_a_clean_case(case):
+    assert case["meta"]["tool_issues"] == []

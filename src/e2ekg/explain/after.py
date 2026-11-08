@@ -46,9 +46,11 @@ def _closure(store: Store, app: str) -> list[str]:
     return sorted({app, *(r["n"][len(APP):] for r in rows if r["n"].startswith(APP))})
 
 
-def _changes(store: Store, apps: list[str], after: datetime, until: datetime) -> list[dict]:
-    """Changes on `apps` in (after, until], in time order: the agent's `changes_in_window`
-    query and wording, without its row LIMIT or its character cap (a page, not a prompt)."""
+def _changes(store: Store, apps: list[str], after: datetime, until: datetime, *,
+             inclusive: bool = False) -> list[dict]:
+    """Changes on `apps` in (after, until] ([after, until] with `inclusive`, as the tool's
+    window), in time order: the agent's `changes_in_window` query and wording, without its row
+    LIMIT or its character cap (a page, not a prompt)."""
     from e2ekg.agent.tools import PFX, _change_what
     values = " ".join(f"<{APP + a}>" for a in apps if _IRI.fullmatch(APP + a))
     if not values:
@@ -62,7 +64,7 @@ def _changes(store: Store, apps: list[str], after: datetime, until: datetime) ->
         OPTIONAL {{ ?c chg:version ?version }} OPTIONAL {{ ?c chg:status ?status }}
         OPTIONAL {{ ?c exp:experiment ?experiment ; exp:cell ?cell ;
                       exp:oldAllocationPct ?oalloc ; exp:newAllocationPct ?nalloc }}
-        FILTER(?t > "{_z(after)}"^^xsd:dateTime && ?t <= "{_z(until)}"^^xsd:dateTime) }}
+        FILTER(?t {'>=' if inclusive else '>'} "{_z(after)}"^^xsd:dateTime && ?t <= "{_z(until)}"^^xsd:dateTime) }}
         ORDER BY ?t ?c""")
     return [{"uri": r["c"], "kind": r["kind"].rstrip("/").rsplit("/", 1)[-1],
              "app": r["app"][len(APP):], "at": r["t"], "what": _change_what(r)} for r in rows]
