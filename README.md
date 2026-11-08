@@ -179,12 +179,37 @@ API_URL=http://127.0.0.1:9000 scripts/start-ui.sh           # terminal 2
 |------|---------------|
 | **Scenarios** (`/`) | Every harvested scenario: quad counts, SHACL status, as-of cutoff and live alert |
 | **Scenario detail** (`/scenarios/<name>`) | The live symptom, ranked causal chains, changes near the alert, the dependency topology, and a button that starts **AutoRCA** (needs the Fireworks key) |
+| **Case view** (`/scenarios/<name>/case`) | Why the AutoRCA verdict is the right root cause: a swimlane (time × service) or force graph of the run, suspects with computed facts beside the agent's own reasons, raw → processed → graph lineage on every node, the agent's trail, the eval scorecard, and what happened after the agent's cut-off |
 | **SPARQL** (`/sparql`) | Read-only `SELECT` queries against the as-of or full store |
 | **Ontology & taxonomy** (`/ontology`) | OWL classes and properties, and SKOS concept schemes |
 | **Evals** (`/evals`) | Scored RCA eval runs from `data/evals/` |
 
 The sidebar footer shows `API unreachable` when the backend is not running, and
 `AutoRCA: no Fireworks key` when `.env` has no key.
+
+#### The case view
+
+The case view explains one saved run: by default the graph-arm run of the newest eval run in
+`data/evals/`, or `?source=eval:<run>` / `?source=job:<id>` for another eval run or a finished
+AutoRCA job. With no saved run it says which command makes one.
+
+| Endpoint | What it returns |
+|----------|-----------------|
+| `GET /api/scenarios/<s>/case` | The case graph (`meta`, `nodes`, `edges`, `trail`), read from the **as-of** store, the one the agent saw. `meta.tool_issues` lists tool calls that failed or were cut to fit while building it. |
+| `GET /api/scenarios/<s>/lineage?uri=` | The raw lines behind a node, with file, byte offset and hash, and the processed row each one became |
+| `GET /api/scenarios/<s>/scorecard` | Every arm of the eval run (LLM agent arms and correlation engine arms), and this scenario's result per arm |
+| `GET /api/scenarios/<s>/after` | Metrics and changes **after** the agent's cut-off, from the full store, always labelled as such |
+
+- **Trail.** AutoRCA jobs and eval runs save the agent's trail next to the report: every
+  finding the specialists recorded (claim, confidence, cited items) and every tool call in order.
+  Runs from before the trail existed say so instead of showing an empty panel.
+- **Recovery after the fix.** A scenario whose fault has a fix recovers after it, so the after
+  panel shows the failed mitigations and then the metrics coming back. The fix only changes
+  records after the cut-off: every record at or before it, the agent's input, is generated as
+  without the fix.
+- **As-of log templates.** The as-of view mines log templates from the log lines observable at
+  the cut-off only, so later lines cannot reshape what the agent saw. Its template ids and texts
+  can therefore differ from the full store's.
 
 ---
 

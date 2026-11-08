@@ -138,6 +138,9 @@ chain, 10 suspects with reasons, 23 raw files, 8 Slack claims). Lessons:
   engine find the right root 7/7; without topology gating the engine drops to 2/7; the agent over
   raw files with no graph gets 5/7.* The graph is what earns the right answer; the agent adds the
   written, checkable explanation.
+  *Note (2026-11-08):* in eval run `recovery-1run` (one run per arm) `raw_only` got 7/7, like the
+  graph arms, so the "5/7" above no longer holds for that run. The UI does not use this sentence:
+  it computes the scorecard headline from the run's results.
 
 - **Persist the agent trail** (user decision): the AutoRCA runner and the eval runner save,
   beside each report, (a) every `ops:Finding` the specialists recorded (URI, specialist, about app,
