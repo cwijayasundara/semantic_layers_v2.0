@@ -20,6 +20,7 @@ export type SwimFrame = {
 export const EARLY = 40;      // items before t0 are squeezed into the left 40 px
 export const LABEL_X = -95;   // lane label (the app node) sits left of the time axis
 const NEAR = 22, STACK = 17, CHAT_GAP = 26, RAW_GAP = 36, LOOSE_GAP = 105;
+const SUB = 14, WRAP = 3 * SUB + 16;   // stagger within a band row; one wrapped band row
 const MIN = 60_000;
 
 export const ms = (iso: string) => Date.parse(iso);
@@ -35,14 +36,23 @@ export function caseT0(meta: CaseMeta, nodes: CaseNode[]): number {
 
 const STACK_OFFSETS = (k: number) => Array.from({ length: k }, (_, i) => (i === 0 ? 0 : (i % 2 ? -1 : 1) * STACK * Math.ceil(i / 2)));
 
-/** Spread items along x in key order, at least `gap` apart, staggered over three sub-rows. */
-function spread(items: { id: string; key: number }[], y: number, gap: number, pos: Record<string, Pos>) {
-  let prev = -Infinity;
-  items.sort((a, b) => a.key - b.key || a.id.localeCompare(b.id)).forEach((it, i) => {
-    const x = Math.max(it.key, prev + gap);
-    prev = x;
-    pos[it.id] = { x, y: y + (i % 3) * 14 };
-  });
+/** How many band rows `n` items `gap` apart need to fit in [lo, hi]. */
+const bandRows = (n: number, gap: number, lo: number, hi: number) =>
+  Math.max(1, Math.ceil(n / (Math.floor((hi - lo) / gap) + 1)));
+
+/** Spread items along x in key order, at least `gap` apart and inside [lo, hi], staggered over
+ * three sub-rows; items that cannot fit wrap onto further rows WRAP px apart (dealt in key
+ * order, so each row stays ordered by key). */
+function spread(items: { id: string; key: number }[], y: number, gap: number, lo: number, hi: number, pos: Record<string, Pos>) {
+  const sorted = [...items].sort((a, b) => a.key - b.key || a.id.localeCompare(b.id));
+  const rows = bandRows(sorted.length, gap, lo, hi);
+  for (let r = 0; r < rows; r++) {
+    const row = sorted.filter((_, i) => i % rows === r);
+    const xs: number[] = [];
+    row.forEach((it, i) => { xs.push(Math.max(Math.min(Math.max(it.key, lo), hi), i ? xs[i - 1] + gap : lo)); });
+    for (let i = row.length - 1; i >= 0; i--) xs[i] = Math.min(xs[i], hi - (row.length - 1 - i) * gap);   // pull back inside hi
+    row.forEach((it, i) => { pos[it.id] = { x: xs[i], y: y + r * WRAP + (i % 3) * SUB }; });
+  }
 }
 
 export function swimFrame(nodes: CaseNode[], opts: SwimOpts): SwimFrame {
@@ -69,7 +79,8 @@ export function swimFrame(nodes: CaseNode[], opts: SwimOpts): SwimFrame {
   const rows: SwimRow[] = [];
   const bands: SwimFrame["bands"] = {};
   let cursor = lane * 0.9;                       // the axis labels sit above this
-  if (chats.length) { bands.chat = cursor; cursor += lane * 1.6; }
+  const extra = (n: number, gap: number) => (bandRows(n, gap, EARLY, width) - 1) * WRAP;
+  if (chats.length) { bands.chat = cursor; cursor += lane * 1.6 + extra(chats.length, CHAT_GAP); }
   for (const a of laneApps) { rows.push({ app: a.label, y: cursor + lane / 2, band: "lane" }); cursor += lane; }
   if (nullApps.length) {
     cursor += lane * 1.1;   // room for labels hanging below the last lane
@@ -84,18 +95,32 @@ export function swimFrame(nodes: CaseNode[], opts: SwimOpts): SwimFrame {
     rows.push({ app: null, y: cursor + lane / 2, band: "unplaced" });
     cursor += lane;
   }
-  if (raws.length) { cursor += lane * 0.6; bands.raw = cursor; cursor += lane * 1.6; }
+  if (raws.length) { cursor += lane * 0.6; bands.raw = cursor; cursor += lane * 1.6 + extra(raws.length, RAW_GAP); }
 
   const rowY = new Map(rows.map((r) => [r.app, r.y]));
   for (const a of apps) pos[a.id] = { x: LABEL_X, y: rowY.get(a.label)! };
 
   // signals in their app's lane; same-lane items within NEAR px stack at ±STACK px
+  const links = new Map<string, string[]>();
+  for (const e of opts.edges ?? []) {
+    links.set(e.target, [...(links.get(e.target) ?? []), e.source]);
+    links.set(e.source, [...(links.get(e.source) ?? []), e.target]);
+  }
+  const atOf = new Map(nodes.filter((n) => n.at).map((n) => [n.id, x(ms(n.at!))]));
+  const cutX = x(t1);
+  // a finding the agent recorded during the run has no data time: it sits just after the
+  // latest item it cites, never past the cut-off (the agent wrote it from what it saw)
+  const runtimeX = (id: string) => {
+    const xs = (links.get(id) ?? []).map((o) => atOf.get(o)).filter((v): v is number => v != null);
+    return Math.min(xs.length ? Math.max(...xs) + NEAR : cutX, cutX - 6);
+  };
   const byRow = new Map<number, { id: string; x: number }[]>();
   const loose: { id: string; key: number }[] = [];
   for (const n of signals) {
     const y = (n.app ? rowY.get(n.app) : undefined) ?? rowY.get(null)!;
-    if (!n.at && y === rowY.get(null)) { loose.push({ id: n.id, key: EARLY }); continue; }   // no lane, no time
-    const it = { id: n.id, x: n.at ? x(ms(n.at)) : untimedX };
+    const runtime = !n.at && n.cat === "finding" && !n.missing;
+    if (!n.at && !runtime && y === rowY.get(null)) { loose.push({ id: n.id, key: EARLY }); continue; }   // no lane, no time
+    const it = { id: n.id, x: n.at ? x(ms(n.at)) : runtime ? runtimeX(n.id) : untimedX };
     byRow.set(y, [...(byRow.get(y) ?? []), it]);
   }
   for (const [y, items] of byRow) {
@@ -120,20 +145,15 @@ export function swimFrame(nodes: CaseNode[], opts: SwimOpts): SwimFrame {
   }
 
   // bands: chat on top, raw at the bottom, each ordered by the mean x of the nodes linked to it
-  const links = new Map<string, string[]>();
-  for (const e of opts.edges ?? []) {
-    links.set(e.target, [...(links.get(e.target) ?? []), e.source]);
-    links.set(e.source, [...(links.get(e.source) ?? []), e.target]);
-  }
   const meanX = (id: string) => {
     const xs = (links.get(id) ?? []).map((o) => pos[o]).filter((p) => p && p.x !== LABEL_X).map((p) => p.x);
     return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : untimedX;
   };
   if (bands.chat !== undefined)
-    spread(chats.map((n) => ({ id: n.id, key: n.at ? x(ms(n.at)) : meanX(n.id) })), bands.chat + lane * 0.4, CHAT_GAP, pos);
+    spread(chats.map((n) => ({ id: n.id, key: n.at ? x(ms(n.at)) : meanX(n.id) })), bands.chat + lane * 0.4, CHAT_GAP, EARLY, width, pos);
   if (bands.raw !== undefined)
     // raw files cited directly by the agent (no graph node read from them) start at the left
-    spread(raws.map((n) => ({ id: n.id, key: links.has(n.id) ? meanX(n.id) : EARLY })), bands.raw + lane * 0.5, RAW_GAP, pos);
+    spread(raws.map((n) => ({ id: n.id, key: links.has(n.id) ? meanX(n.id) : EARLY })), bands.raw + lane * 0.5, RAW_GAP, EARLY, width, pos);
 
   return { pos, rows, bands, bottom: cursor, x, untimedX, above };
 }

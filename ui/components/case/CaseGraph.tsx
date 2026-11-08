@@ -56,7 +56,8 @@ function display(n: CaseNode): string {
   else if (has(n, "best_candidate")) s = `best candidate, not accepted · confidence ${(n.confidence ?? 0).toFixed(2)}\n${short(n.label, 30)} · ${t}`;
   else if (n.cat === "change") s = `${short(n.label)}\n${t}`;
   else if (n.cat === "alert" || n.cat === "incident") s = `${n.label} · ${t}`;
-  else if (n.cat === "finding" || n.cat === "other") s = `${n.cat} ${n.label.slice(0, 8)}`;
+  else if (n.cat === "finding") s = `${n.missing ? "finding" : "agent finding"} ${n.label.slice(0, 8)}`;
+  else if (n.cat === "other") s = `${n.cat} ${n.label.slice(0, 8)}`;
   else s = `${n.cat} ${t}`;
   if (n.hop != null && !has(n, "root", "best_candidate")) s = `#${n.hop} ${s}`;
   return n.missing ? `${s}\n(not in as-of store)` : s;
