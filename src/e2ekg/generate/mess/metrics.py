@@ -56,7 +56,8 @@ def _record_per_path(self, recs, idxs, series, **detail):
     paths: dict[str, int] = {}
     for i in idxs:
         paths[recs[i].rel_path] = paths.get(recs[i].rel_path, 0) + 1
-    return [self.record(p, series=series, count=n, **detail) for p, n in paths.items()]
+    return [self.record(p, [recs[i] for i in idxs if recs[i].rel_path == p], series=series,
+                        count=n, **detail) for p, n in paths.items()]
 
 
 def _set_val(r, v):

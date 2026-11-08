@@ -252,3 +252,28 @@ def test_stream_wide_mess_is_the_same_after_the_cutoff(trees):
     surface at the cutoff: the fixed run's manifest lists the same ones."""
     a = _wide(trees["plain"])
     assert a and a == _wide(trees["fix"])
+
+
+def _undecodable(t: Tree) -> int:
+    n = 0
+    for r in t.recs:
+        try:
+            r.payload.decode("utf-8")
+        except UnicodeDecodeError:
+            n += 1
+    return n
+
+
+def test_manifest_lists_only_written_injections(trees):
+    """A record-level injection after the cutoff is in the manifest only when
+    its record is written: the mixed mess also corrupts the baseline's
+    post-cutoff records, which the splice drops (log.encoding writes exactly
+    one undecodable line per injection, so the two counts must agree)."""
+    for name in ("plain", "fix"):
+        t = trees[name]
+        enc = [i for i in t.manifest()["injections"] if i["injector_id"] == "log.encoding"]
+        assert enc and len(enc) == _undecodable(t), name
+        dup = [i for i in t.manifest()["injections"] if i["injector_id"] == "log.duplicate"]
+        logs = Counter((r.rel_path, r.payload) for r in t.recs if r.source == "logs"
+                       or r.rel_path.startswith("logs/"))
+        assert sum(n - 1 for n in logs.values()) >= len(dup) > 0, name

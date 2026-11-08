@@ -182,9 +182,13 @@ def _splice_injections(base: list[MessInjection], fixed: list[MessInjection],
                        cut: datetime, base_paths: set[str],
                        fixed_paths: set[str]) -> list[MessInjection]:
     """The baseline's injections on records up to the cutoff and the mixed run's
-    after it (some of those were on baseline records the splice drops); one with
-    no record time goes with the run whose records its file holds (once, if both
-    made the same one up to its count)."""
+    on the records the splice keeps. A mixed-run injection says which records it
+    corrupted (`on_recovery`): on fixed records it is kept, on the baseline's
+    (which the splice drops after the cutoff, and takes from the baseline run up
+    to it) it is not. One that does not say (stream-wide, or over both) goes by
+    its time: after the cutoff it is kept; with no record time it goes with the
+    run whose records its file holds (once, if both made the same one up to its
+    count)."""
     def when(i: MessInjection) -> datetime | None:
         d = json.loads(i.detail)
         at = d.get("at_utc", d.get("at_utc_a"))
@@ -204,6 +208,10 @@ def _splice_injections(base: list[MessInjection], fixed: list[MessInjection],
             out.append(i)
             seen.add(key(i))
     for i in fixed:
+        if i.on_recovery is not None:
+            if i.on_recovery:
+                out.append(i)
+            continue
         at = when(i)
         if (at is None and i.rel_path in fixed_paths and key(i) not in seen) or \
                 (at is not None and at > cut):

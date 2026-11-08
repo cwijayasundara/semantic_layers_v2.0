@@ -113,7 +113,8 @@ def slack_only_rename(self, recs, rng, scenario):
         for app, p in pats.items():
             after = p.sub(SLACK_ONLY[app], after)
         out[i] = replace(r, fields={**r.fields, "text": after})
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, before=before, after=after))
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, before=before,
+                               after=after))
     return out, inj
 
 

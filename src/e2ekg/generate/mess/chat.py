@@ -45,7 +45,7 @@ def typo(self, recs, rng, scenario):
         p = sp[int(rng.integers(len(sp)))]
         after = before[:p] + before[p + 1] + before[p] + before[p + 2:]
         out[i] = set_fields(recs[i], text=after)
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc,
                                before=before, after=after))
     return out, inj
 
@@ -70,7 +70,8 @@ def nickname(self, recs, rng, scenario):
         if after == before:
             continue
         out[i] = set_fields(out[i], text=after)
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc, app=app,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc,
+                               app=app,
                                nickname=NICKNAMES[app], before=before, after=after))
     return out, inj
 
@@ -110,7 +111,7 @@ def edit(self, recs, rng, scenario):
         adds.append((i, replace(r, at_utc=at, fields={
             "type": "message", "subtype": "message_changed", "ts": at, "message": msg,
             "previous_message": prev})))
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, edited_at=at,
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, edited_at=at,
                                before=f["text"], after=new_text))
     return _add_after(recs, adds), inj
 
@@ -139,7 +140,8 @@ def retraction(self, recs, rng, scenario):
             "type": "message", "user": r.fields.get("user"),
             "text": f"scratch that, I don't think it's {app} after all", "ts": at,
             "thread_ts": r.fields["ts"]})))
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, app=app, retracted_at=at))
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, app=app,
+                               retracted_at=at))
     return _add_after(recs, adds), inj
 
 

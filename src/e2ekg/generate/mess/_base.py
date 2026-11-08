@@ -7,7 +7,7 @@ together let Task 6 tests find the record and check the undo."""
 import json
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -31,6 +31,10 @@ class MessInjection:
     injector_id: str
     rel_path: str
     detail: str
+    # Whether the record(s) it corrupted carry RECOVERY_TAG: True all, False none,
+    # None not said (a stream-wide injection) or a mix. Bookkeeping for the
+    # recovery splice, never written to the manifest.
+    on_recovery: bool | None = field(default=None, compare=False)
 
 
 class Injector(Protocol):
@@ -70,9 +74,12 @@ class FnInjector:
     def eligible(self, r: RawRecord, fmts: Iterable[str] | None = None) -> bool:
         return r.source in self.sources and (fmts is None or r.fmt in fmts)
 
-    def record(self, rel_path: str, **detail: Any) -> MessInjection:
+    def record(self, rel_path: str, of: Iterable[RawRecord] = (), **detail: Any) -> MessInjection:
+        """`of`: the records this injection corrupted (its origin, for the splice)."""
+        tagged = {RECOVERY_TAG in r.tags for r in of}
         return MessInjection(self.id, rel_path, json.dumps(
-            detail, sort_keys=True, ensure_ascii=False, default=_jdefault))
+            detail, sort_keys=True, ensure_ascii=False, default=_jdefault),
+            on_recovery=tagged.pop() if len(tagged) == 1 else None)
 
 
 def injector(id: str, sources: Iterable[str], phase: Phase = "structured"):

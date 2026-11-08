@@ -74,7 +74,8 @@ def truncate(self, recs, rng, scenario):
         pl = recs[i].payload
         cut = int(rng.integers(1, len(pl) - 1))
         out[i] = replace(recs[i], payload=pl[:cut])
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc, cut_at=cut,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc,
+                               cut_at=cut,
                                original_len=len(pl), removed_hex=pl[cut:].hex()))
     return out, inj
 
@@ -88,7 +89,7 @@ def duplicate(self, recs, rng, scenario):
     for k in pick(rng, len(cands), DUP_RATE):
         i = cands[k]
         after[i] = [recs[i]]
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc))
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc))
     return with_inserts(recs, after), inj
 
 
@@ -107,7 +108,7 @@ def interleave(self, recs, rng, scenario):
             continue
         used |= {a, b}
         out[a], out[b] = recs[b], recs[a]
-        inj.append(self.record(recs[a].rel_path, idx_a=loc[a], idx_b=loc[b],
+        inj.append(self.record(recs[a].rel_path, [recs[a], recs[b]], idx_a=loc[a], idx_b=loc[b],
                                at_utc_a=recs[a].at_utc, at_utc_b=recs[b].at_utc))
     return out, inj
 
@@ -137,7 +138,8 @@ def pii(self, recs, rng, scenario):
                 field, out[i] = "msg", set_fields(r, msg=f"{r.fields['msg']} user={email}")
             case _:
                 field, out[i] = "remote_user", set_fields(r, remote_user=email)
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, field=field, value=email))
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, field=field,
+                               value=email))
     return out, inj
 
 
@@ -181,7 +183,7 @@ def encoding(self, recs, rng, scenario):
         else:  # pragma: no cover - guarded by latin1_undecodable
             raise AssertionError(f"log.encoding produced decodable bytes in {p}")
         out[i] = replace(recs[i], payload=enc[i])
-        inj.append(self.record(p, idx=loc[i], at_utc=recs[i].at_utc, from_enc="utf-8",
+        inj.append(self.record(p, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc, from_enc="utf-8",
                                to_enc="latin-1"))
     return out, inj
 

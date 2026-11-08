@@ -84,7 +84,8 @@ def orphan(self, recs, rng, scenario):
         new = _new_trace_id(rng, {r[2] for r in rows})
         i, j = present[(tid, psid)]
         _set_span(out, i, j, traceId=new)
-        inj.append(self.record(recs[i].rel_path, trace_id=tid, span_id=psid, new_trace_id=new,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], trace_id=tid, span_id=psid,
+                               new_trace_id=new,
                                orphaned_children=parents[tid][psid]))
     return out, inj
 
@@ -105,7 +106,8 @@ def skew(self, recs, rng, scenario):
         delta = (ts_utc(child["start"]) - p_start) + timedelta(milliseconds=lead_ms)
         _set_span(out, i, j, start=shift_ts(child["start"], -delta),
                   end=shift_ts(child["end"], -delta))
-        inj.append(self.record(recs[i].rel_path, trace_id=tid, span_id=sid, parent_span_id=par,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], trace_id=tid, span_id=sid,
+                               parent_span_id=par,
                                shift_us=-(delta // timedelta(microseconds=1)),
                                lead_before_parent_ms=lead_ms))
     return out, inj
@@ -199,7 +201,8 @@ def zipkin_legacy(self, recs, rng, scenario):
                 and resolve(r.fields["resource"]["service.name"]) in LEGACY_ZIPKIN_APPS):
             z, collisions = _to_zipkin(r)
             out += z
-            inj.append(self.record(z[0].rel_path if z else r.rel_path, from_rel_path=r.rel_path,
+            inj.append(self.record(z[0].rel_path if z else r.rel_path, [r],
+                                   from_rel_path=r.rel_path,
                                    service=r.fields["resource"]["service.name"], n_spans=len(z),
                                    prefixed_resource_keys=collisions))
         else:
@@ -242,7 +245,9 @@ def sampling(self, recs, rng, scenario):
                 drop_span.setdefault(i, set()).add(j)
             per_path.setdefault(recs[i].rel_path, []).append(sid)
         for p, sids in per_path.items():
-            inj.append(self.record(p, trace_id=tid, dropped_span_ids=sids,
+            hit = [recs[i] for i, _, _ in droppable[tid] if recs[i].rel_path == p]
+            inj.append(self.record(p, hit,
+                                   trace_id=tid, dropped_span_ids=sids,
                                    apps=sorted({app_of(recs[i]) for i, _, _ in droppable[tid]}),
                                    reason="sampled flag ignored"))
     out = []
