@@ -121,3 +121,34 @@ def test_after_endpoint(client, after):
     assert body["changes"] == after["changes"] and body["series"] == after["series"]
     r = client.get("/api/scenarios/hero/after", params={"source": "eval:nope"})
     assert r.status_code == 404
+
+
+def test_changes_are_not_capped(harvested_hero, preprocessed_hero, case):
+    """Over the whole window the agent's changes_in_window is cut to its character cap
+    (the last row carries the note); the after view keeps every change."""
+    from e2ekg.agent.tools import make_tools
+    from e2ekg.explain.after import _changes, _closure
+    alert = case["meta"]["alert"]
+    lo, hi = _when("2026-10-14T19:00:00Z"), _when("2026-10-15T01:00:00Z")
+    apps = _closure(harvested_hero.store, alert["app"])
+    tools = make_tools(harvested_hero.store, preprocessed_hero.proc, "hero", "after-test",
+                       as_of=_when(case["meta"]["as_of"]))
+    closure = json.loads(tools["dependency_closure"].invoke({"app": alert["app"],
+                                                             "direction": "down"}))
+    assert {r["id"] for r in closure if "id" in r} == set(apps)
+    capped = json.loads(tools["changes_in_window"].invoke(
+        {"apps": apps, "start": "2026-10-14T19:00:01Z", "end": hi.isoformat()}))
+    assert {"truncated"} & set(capped[-1])            # the agent's view is cut here
+    got = _changes(harvested_hero.store, apps, lo, hi)
+    assert len(got) > len(capped)
+    assert [c["uri"] for c in got[:len(capped)]] == [c["uri"] for c in capped]
+    assert {(c["uri"], c["what"]) for c in got} >= {(c["uri"], c["what"]) for c in capped}
+
+
+def test_aggregate_series_says_so(after, case):
+    alert = case["meta"]["alert"]
+    s = after["series"][0]
+    assert (s["name"], s["app"]) == (alert["metric"], alert["app"])
+    assert s["aggregate"] == "mean"
+    assert s["apps"] == ["client-android", "client-ios", "client-tv", "client-web"]
+    assert all(x["aggregate"] is None and x["apps"] == [x["app"]] for x in after["series"][1:])
