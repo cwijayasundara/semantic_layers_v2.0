@@ -40,6 +40,7 @@ symptom's alert + 30 min: an incident's alert is the one named by its opening pa
 (`opening_page`: the last page triggered at or before it opened)."""
 import functools
 import json
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -89,8 +90,21 @@ def _claims(proc: Path, t: datetime) -> pl.LazyFrame:
     return pl.scan_parquet(_path(proc, "derived/chat_claims")).join(seen, on="raw_id", how="semi")
 
 
-@functools.lru_cache(maxsize=4)
+_MINING: dict[tuple, threading.Lock] = {}
+_MINING_GUARD = threading.Lock()
+
+
 def _mined(path: Path, stamp: tuple[int, int], t: datetime) -> pl.DataFrame:
+    """`_mine` once per key: concurrent first requests for one scenario wait for one mining
+    instead of each mining the same lines."""
+    with _MINING_GUARD:
+        lock = _MINING.setdefault((path, stamp, t), threading.Lock())
+    with lock:
+        return _mine(path, stamp, t)
+
+
+@functools.lru_cache(maxsize=8)        # one per scenario (seven), with room to spare
+def _mine(path: Path, stamp: tuple[int, int], t: datetime) -> pl.DataFrame:
     """raw_id, template_id, template, params of the log lines before `t`, mined over those
     lines alone. `stamp` (mtime, size) keys the cache to the file's contents. Mining is
     independent of row order: Drain sees the distinct masked messages, sorted."""

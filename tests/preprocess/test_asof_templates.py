@@ -86,3 +86,32 @@ def test_asof_templates_are_the_observable_lines_own(trees):
         want.select("raw_id", "template_id"))
     spikes = scan(reshaped, "derived/fp_log_spikes", CUT).collect()
     assert spikes["template"].to_list() == ["connection reset by peer alpha"]
+
+
+def test_concurrent_first_requests_mine_once(tmp_path, monkeypatch):
+    """The cache holds every scenario, and two first requests for one key mine it once."""
+    import threading
+    import time
+
+    from e2ekg.preprocess import asof
+    assert asof._mine.cache_info().maxsize >= 7
+    path = tmp_path / "logs.parquet"
+    pl.DataFrame({"raw_id": ["a", "b"], "msg": ["x 1", "x 2"],
+                  "ts_utc": [T0, T0 + timedelta(seconds=1)]}).write_parquet(path)
+    calls = []
+
+    def slow(df):
+        calls.append(1)
+        time.sleep(0.3)
+        return mine_templates(df)
+
+    monkeypatch.setattr(asof, "mine_templates", slow)
+    st = path.stat()
+    key = (path, (st.st_mtime_ns, st.st_size), CUT)
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(asof._mined(*key))) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(calls) == 1 and len(out) == 4
