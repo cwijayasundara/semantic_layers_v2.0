@@ -26,12 +26,15 @@ function niceTicks(lo: number, hi: number, n = 4): number[] {
   return out;
 }
 
-/** Changes close together in time share one marker label ("1–3"). */
+const markLabel = (m: { from: number; to: number }) => (m.from === m.to ? `${m.from + 1}` : `${m.from + 1}–${m.to + 1}`);
+const LABEL_W = (s: string) => 2 + s.length * 6.2 + 4;   // 10 px text from x + 2, then a gap
+
+/** Changes whose marker label would run into the previous label share it ("1–3"). */
 function clusters(changes: AfterChange[], x: (t: number) => number) {
   const out: { x: number; from: number; to: number }[] = [];
   changes.forEach((c, i) => {
     const px = x(ms(c.at)), last = out[out.length - 1];
-    if (last && px - last.x < 14) last.to = i; else out.push({ x: px, from: i, to: i });
+    if (last && px - last.x < Math.max(14, LABEL_W(markLabel(last)))) last.to = i; else out.push({ x: px, from: i, to: i });
   });
   return out;
 }
@@ -81,7 +84,7 @@ function Chart({ s, asOf, changes, t0, t1 }: { s: AfterSeries; asOf: number; cha
         ))}
         {marks.map((m) => (
           <text key={m.from} x={m.x + 2} y={M.t - 8} fontSize={10} textAnchor="start" fill="var(--text)">
-            {m.from === m.to ? m.from + 1 : `${m.from + 1}–${m.to + 1}`}
+            {markLabel(m)}
           </text>
         ))}
         <path d={path} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
