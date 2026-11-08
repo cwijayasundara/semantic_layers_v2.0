@@ -9,6 +9,7 @@ Read endpoints open each scenario's stores read-only and go through the agent's 
   GET  /api/scenarios/{s}/topology         dependsOn edges with app kind and tier
   GET  /api/scenarios/{s}/alerts           alerts in the as-of store, newest first
   GET  /api/scenarios/{s}/case             RCA case graph for a saved run (?source=eval:<run>|job:<id>)
+  GET  /api/scenarios/{s}/after            after the agent's cut-off, from the full store (?source=)
   GET  /api/scenarios/{s}/lineage          raw -> processed lineage of a node (?uri=)
   GET  /api/scenarios/{s}/scorecard        per-arm scorecard of an eval run (?run=)
   POST /api/scenarios/{s}/sparql           read-only SELECT on the as-of or full store
@@ -401,6 +402,23 @@ def case(scenario: str, source: str = "") -> dict:
         raise HTTPException(404, str(e))
     out["meta"]["source"] = f"eval:{run_dir.name}" if run_dir else source
     return out
+
+
+@app.get("/api/scenarios/{scenario}/after")
+def after(scenario: str, source: str = "") -> dict:
+    """The run's case, continued past its cut-off: the symptom and chain metrics and the
+    changes after `as_of`, read from the full store and labelled after the cut-off."""
+    from e2ekg.explain.after import after_cutoff
+    from e2ekg.explain.case import build_case
+    run, _ = _run_for(scenario, source)
+    tools = _tools(scenario, "as_of")
+    try:
+        meta = build_case(_store(scenario, "as_of"), tools, scenario, run)["meta"]
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    top = (run["report"].get("hypotheses") or [{}])[0]
+    chain = [u.strip() for u in top.get("chain", [])]
+    return after_cutoff(_store(scenario, "full"), DATA / "processed" / scenario, meta, chain)
 
 
 @app.get("/api/scenarios/{scenario}/lineage")

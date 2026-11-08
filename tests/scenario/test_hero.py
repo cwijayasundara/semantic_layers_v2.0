@@ -32,7 +32,8 @@ def test_red_herrings_inside_ten_minute_window():
 
 def test_scaling_events_are_effects_not_herrings():
     s = hero_scenario()
-    asg = [c for c in s.changes if c.id.startswith("chg-asg-")]
+    # the scale-in; chg-asg-0007..0010 are the fix's scale-outs (tests/scenario/test_fixes.py)
+    asg = [c for c in s.changes if c.id.startswith("chg-asg-") and c.at_utc < pt(2026, 10, 14, 17, 0)]
     assert [c.id for c in asg] == [f"chg-asg-000{i}" for i in range(1, 7)]
     assert [c.at_utc for c in asg] == [pt(2026, 10, 14, 15, m) for m in (0, 2, 4, 6, 8, 10)]
     assert asg[-1].attrs["desired_capacity"] == "12"

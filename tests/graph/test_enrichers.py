@@ -252,7 +252,8 @@ def test_changes_follow_the_core_header_conventions(harvested_hero, preprocessed
     assert set(answers["external_ids"]) <= set(ids)           # each scenario change, by external id
     assert not any(r["id"].startswith("chg-") for r in rows)  # no scenario ids (R22)
     kinds = Counter(r["kind"] for r in rows)
-    assert kinds["scaling"] == 10 and kinds["config_change"] == 6   # every ASG / property line
+    # every ASG / property line: 4 of each scaling and 1 config change are the post-cutoff fix
+    assert kinds["scaling"] == 14 and kinds["config_change"] == 7
     ext = {v: k for k, v in answers["external_ids"].items()}
     dep = {r["id"]: r for r in rows}[ext["chg-dep-0001"]]     # the api-gateway deploy
     assert dep["t"] == "2026-10-14T22:18:00Z"                 # SUCCEEDED, not RUNNING (22:14)
