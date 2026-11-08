@@ -4,7 +4,14 @@ the value in `v`, Prometheus samples in `value`. One MessInjection per
 import json
 from dataclasses import replace
 
-from e2ekg.generate.mess._base import injector, pick, rename_key, with_inserts
+from e2ekg.generate.mess._base import (
+    RECOVERY_TAG,
+    base_keys,
+    injector,
+    pick,
+    rename_key,
+    with_inserts,
+)
 
 DRIFT_RATE, UNIT_RATE, RESET_RATE, GAP_RATE, LATE_RATE, DUP_RATE = 0.10, 0.2, 0.1, 0.05, 0.05, 0.02
 DRIFT_TO = {"atlas_jsonl": ("tags", "nf.app", ("app", "service")),
@@ -30,11 +37,27 @@ def _series(self, recs, keep=lambda r: True) -> dict[str, list[int]]:
     return out
 
 
+def _n_base(recs, idxs: list[int]) -> int:
+    """How many of a series' records are not recovery records (all, normally)."""
+    return sum(RECOVERY_TAG not in recs[i].tags for i in idxs)
+
+
+def _from_baseline_pos(recs, idxs: list[int], pos) -> list[int]:
+    """idxs (time-sorted) from the point `pos(n)` picks among the non-recovery
+    ones on; just idxs[pos(len(idxs)):] when there are no recovery records."""
+    base = [i for i in idxs if RECOVERY_TAG not in recs[i].tags]
+    if len(base) == len(idxs):
+        return idxs[pos(len(idxs)):]
+    since = recs[base[pos(len(base))]].at_utc
+    return [i for i in idxs if recs[i].at_utc >= since]
+
+
 def _record_per_path(self, recs, idxs, series, **detail):
     paths: dict[str, int] = {}
     for i in idxs:
         paths[recs[i].rel_path] = paths.get(recs[i].rel_path, 0) + 1
-    return [self.record(p, series=series, count=n, **detail) for p, n in paths.items()]
+    return [self.record(p, over=[recs[i] for i in idxs if recs[i].rel_path == p], series=series,
+                        count=n, **detail) for p, n in paths.items()]
 
 
 def _set_val(r, v):
@@ -45,13 +68,13 @@ def _set_val(r, v):
 def tag_key_drift(self, recs, rng, scenario):
     """From mid-series on, the app tag key changes (nf.app -> app/service)."""
     ser = _series(self, recs, lambda r: DRIFT_TO[r.fmt][1] in (r.fields.get(_TAGS[r.fmt]) or {}))
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), DRIFT_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
         tk, old, choices = DRIFT_TO[recs[idxs[0]].fmt]
         new = choices[int(rng.integers(len(choices)))]
-        moved = idxs[len(idxs) // 2:]
+        moved = _from_baseline_pos(recs, idxs, lambda n: n // 2)
         for i in moved:
             out[i] = replace(out[i], fields={**out[i].fields,
                                              tk: rename_key(out[i].fields[tk], old, new)})
@@ -64,7 +87,7 @@ def tag_key_drift(self, recs, rng, scenario):
 def unit_seconds(self, recs, rng, scenario):
     """A latency series reported in seconds although its siblings use ms."""
     ser = _series(self, recs, lambda r: "latency" in r.fields["name"])
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), UNIT_RATE):
         for i in ser[keys[k]]:
@@ -80,17 +103,23 @@ def unit_seconds(self, recs, rng, scenario):
 def counter_reset(self, recs, rng, scenario):
     """Process restart mid-series: cumulative counter restarts from zero."""
     ser = {k: v for k, v in _series(self, recs, lambda r: r.fields["name"].endswith("_total"))
-           .items() if len(v) >= 2}
-    keys = list(ser)
+           .items() if _n_base(recs, v) >= 2}
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), RESET_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
-        at = int(rng.integers(1, len(idxs)))
-        offset = recs[idxs[at - 1]].fields["value"]
-        for i in idxs[at:]:
+        n_base = _n_base(recs, idxs)
+        at = int(rng.integers(1, n_base))
+        after = _from_baseline_pos(recs, idxs, lambda n: at)
+        if n_base == len(idxs):
+            offset = recs[idxs[at - 1]].fields["value"]
+        else:  # the baseline record just before the reset
+            offset = recs[[i for i in idxs if RECOVERY_TAG not in recs[i].tags
+                           and recs[i].at_utc < recs[after[0]].at_utc][-1]].fields["value"]
+        for i in after:
             out[i] = _set_val(out[i], out[i].fields["value"] - offset)
-        inj += _record_per_path(self, recs, idxs[at:], keys[k], offset=offset,
-                                reset_at=recs[idxs[at]].at_utc)
+        inj += _record_per_path(self, recs, after, keys[k], offset=offset,
+                                reset_at=recs[after[0]].at_utc)
     return out, inj
 
 
@@ -98,8 +127,8 @@ def counter_reset(self, recs, rng, scenario):
 def gap(self, recs, rng, scenario):
     """Collector outage: a run of points has no value (`v: null`). The points
     stay in place and the lost values are kept in the detail."""
-    ser = {k: v for k, v in _series(self, recs).items() if len(v) >= 6}
-    keys = list(ser)
+    ser = {k: v for k, v in _series(self, recs).items() if _n_base(recs, v) >= 6}
+    keys = base_keys(recs, ser)
     out, inj = list(recs), []
     for k in pick(rng, len(keys), GAP_RATE):
         idxs = sorted(ser[keys[k]], key=lambda i: recs[i].at_utc)
@@ -117,8 +146,8 @@ def gap(self, recs, rng, scenario):
 @injector("met.late", ("atlas",))
 def late(self, recs, rng, scenario):
     """A run of points arrives late: appended after everything else in the file."""
-    ser = {k: v for k, v in _series(self, recs).items() if len(v) >= 4}
-    keys = list(ser)
+    ser = {k: v for k, v in _series(self, recs).items() if _n_base(recs, v) >= 4}
+    keys = base_keys(recs, ser)
     late_idx: list[int] = []
     inj = []
     for k in pick(rng, len(keys), LATE_RATE):
@@ -137,7 +166,7 @@ def duplicate_series(self, recs, rng, scenario):
     """A second collector re-emits a series. Atlas copies differ only in tag
     order; Prometheus copies are identical sample lines."""
     ser = _series(self, recs)
-    keys = list(ser)
+    keys = base_keys(recs, ser)
     after: dict[int, list] = {}
     inj = []
     for k in pick(rng, len(keys), DUP_RATE):

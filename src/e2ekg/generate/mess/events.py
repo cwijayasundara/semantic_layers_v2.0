@@ -27,7 +27,8 @@ def missing_field(self, recs, rng, scenario):
         desc = f"{r.fields.get('description', '')} ({field}: {value})".strip()
         fields = {k2: v for k2, v in r.fields.items() if k2 != field} | {"description": desc}
         out[i] = replace(r, fields=fields)
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, field=field, value=value,
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, field=field,
+                               value=value,
                                moved_to="description"))
     return out, inj
 
@@ -41,7 +42,7 @@ def duplicate_webhook(self, recs, rng, scenario):
     for k in pick(rng, len(cands), DUP_WEBHOOK_RATE):
         i = cands[k]
         after[i] = [recs[i]]
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc))
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc))
     return with_inserts(recs, after), inj
 
 

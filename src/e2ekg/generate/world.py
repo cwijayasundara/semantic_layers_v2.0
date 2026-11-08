@@ -6,6 +6,7 @@ evidence, so metrics, logs, traces, events and chat agree with each other.
 Nothing here draws from an rng: app-specific constants come from a stable
 hash, and every renderer brings its own seeded rng for the noise."""
 import hashlib
+import zlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -63,6 +64,42 @@ def ramp(t: np.ndarray, start: float) -> np.ndarray:
     return np.clip((np.asarray(t, dtype=float) - start) / RAMP_S, 0.0, 1.0)
 
 
+def ramp_between(t: np.ndarray, start: float, end: float | None) -> np.ndarray:
+    """Ramps up over RAMP_S from `start` and, when `end` is set, back down over
+    RAMP_S from `end`. Up to `end` it is exactly `ramp(t, start)` (times 1.0)."""
+    r = ramp(t, start)
+    return r if end is None else r * (1.0 - ramp(t, end))
+
+
+def active(t: np.ndarray, d: Degradation) -> np.ndarray:
+    """How strongly Degradation `d` acts at `t` (0..1): on from its start, off
+    after its end (the fix plus recovery lag, when there is one)."""
+    return ramp_between(t, epoch(d.start_utc), epoch(d.end_utc) if d.end_utc else None)
+
+
+def after_fix(s: Scenario, c: Change) -> bool:
+    """A change at or after the fix: absent from the scenario's baseline (run.py),
+    so a renderer draws for it from recovery_rng, never from its own stream."""
+    fix = fix_change(s)
+    return fix is not None and c.at_utc >= fix.at_utc
+
+
+def recovery_rng(s: Scenario, *key: str) -> np.random.Generator:
+    """The rng for draws that only recovery makes, never one of the renderers'
+    streams: one stream per key, which names the renderer and what it draws for
+    (an app, a change id), so no two draw sites replay each other. (numpy seeds
+    take ints, so "recovery" and the key parts are crc32'd the way run.py
+    derives the renderers' streams from [seed, crc32(name)].)"""
+    return np.random.default_rng(np.random.SeedSequence(
+        [s.seed, zlib.crc32(b"recovery"), *(zlib.crc32(k.encode()) for k in key)]))
+
+
+def fix_change(s: Scenario) -> Change | None:
+    """The change that fixes the fault (the real mitigation), if the scenario has one."""
+    fid = s.fault.fix_change_id
+    return next((c for c in s.changes if c.id == fid), None) if fid else None
+
+
 @dataclass
 class World:
     scenario: Scenario
@@ -90,6 +127,12 @@ class World:
         self.local_offset_s = s.window.start_utc.astimezone(PT).utcoffset().total_seconds()
         self._grid = np.arange(self.t0, self.t1, 1.0)
         self._extra: dict[str, np.ndarray] = {}
+        # Fault-wide effects (not tied to one Degradation) end when the fault
+        # target's own degradation ends.
+        ends = [d.end_utc for d in self.deg.get(s.fault.target, ()) if d.end_utc is not None]
+        self.fault_end: float | None = epoch(min(ends)) if ends else None
+        fix = fix_change(s)
+        self.fix_at = fix.at_utc if fix is not None else None
 
     # ---- time ----------------------------------------------------------
     def minutes(self) -> np.ndarray:
@@ -131,6 +174,10 @@ class World:
         return self.apps[app].kind == "client"
 
     # ---- degradation effects ------------------------------------------
+    def fault_ramp(self, t: np.ndarray, start: float) -> np.ndarray:
+        """A fault-wide effect from `start` that ends with the fault target's recovery."""
+        return ramp_between(t, start, self.fault_end)
+
     def degs_of(self, app: str, kind: str | None = None) -> list[Degradation]:
         return [d for d in self.deg.get(app, ()) if kind is None or d.kind == kind]
 
@@ -139,7 +186,7 @@ class World:
         if self.is_client(app):
             return out
         for d in self.deg.get(app, ()):
-            r = ramp(t, epoch(d.start_utc))
+            r = active(t, d)
             if d.kind == "latency":
                 out += max(TARGET_FLOOR_MS, self.base(app)[1] * d.magnitude) * r
             elif d.kind == "pool_exhaustion":
@@ -168,12 +215,12 @@ class World:
         """Extra probability that a request fails *at* `app`."""
         out = np.zeros(np.shape(t))
         for d in self.deg.get(app, ()):
-            out += DEG_ERROR.get(d.kind, 0.0) * ramp(t, epoch(d.start_utc))
+            out += DEG_ERROR.get(d.kind, 0.0) * active(t, d)
         f = self.scenario.fault
         if app == f.target:
             onset = min(epoch(d.start_utc) for d in self.deg[app]) if app in self.deg else None
             if onset is not None:
-                out += FAULT_ERROR[f.kind] * ramp(t, onset)
+                out += FAULT_ERROR[f.kind] * self.fault_ramp(t, onset)
         return out
 
     def route_error_p(self, app: str, t: np.ndarray) -> np.ndarray:
@@ -196,13 +243,13 @@ class World:
     def shed_p(self, app: str, t: np.ndarray) -> np.ndarray:
         out = np.zeros(np.shape(t))
         for d in self.degs_of(app, "load_shed"):
-            out += SHED_PER_MAGNITUDE * d.magnitude * ramp(t, epoch(d.start_utc))
+            out += SHED_PER_MAGNITUDE * d.magnitude * active(t, d)
         return out
 
     def client_extra_s(self, app: str, t: np.ndarray) -> np.ndarray:
         out = np.zeros(np.shape(t))
         for d in self.degs_of(app, "latency"):
-            out += d.magnitude * ramp(t, epoch(d.start_utc))
+            out += d.magnitude * active(t, d)
         return out
 
     # ---- evidence (answer_key.causal_chain) ---------------------------
@@ -221,7 +268,7 @@ class World:
     def change_tags(self, c: Change) -> frozenset[str]:
         sig = CHANGE_SIGNAL[c.kind]
         at = self.link_at(sig, c.app)
-        if at is None:
+        if at is None or (self.fix_at is not None and c.at_utc >= self.fix_at):
             return frozenset()
         hit = c.at_utc == at or (sig == "autoscaling" and c.at_utc >= at)
         return frozenset({f"evidence:{sig}"}) if hit else frozenset()
@@ -258,22 +305,29 @@ class Mitigation:
     bumped_to: int
 
 
-def mitigation_attempts(s: Scenario) -> tuple[Mitigation, ...]:
+def mitigation_attempts(s: Scenario, include_after_fix: bool = False) -> tuple[Mitigation, ...]:
     """Renderer-side mitigation events, not Scenario changes: on a capacity
     reduction driven by an `*.asg.minInstances` fast property, responders bump
-    the ASG to MITIGATION_MIN twice after the cutoff and the poller resets it."""
+    the ASG to MITIGATION_MIN twice after the cutoff and the poller resets it.
+    Attempts at or after the fix (the property revert) are not made
+    (`include_after_fix=True` lists them too, for a renderer that keeps their draws)."""
     f, cut = s.fault, as_of_utc(s)
     if f.kind != "capacity_reduction" or cut is None:
         return ()
     prop = next((c for c in s.changes if c.kind == "config_change" and c.app == f.target
-                 and c.attrs.get("property", "").endswith(".asg.minInstances")), None)
-    scales = sorted((c for c in s.changes if c.kind == "scaling" and c.app == f.target),
-                    key=lambda c: c.at_utc)
+                 and c.attrs.get("property", "").endswith(".asg.minInstances")
+                 and c.at_utc < cut), None)
+    # The floor the poller resets to: capacity as scaled down before the cutoff
+    # (the fix's own scale-outs come later and are not the floor).
+    scales = sorted((c for c in s.changes if c.kind == "scaling" and c.app == f.target
+                     and c.at_utc < cut), key=lambda c: c.at_utc)
     if prop is None or not scales:
         return ()
     floor = int(scales[-1].attrs["desired_capacity"])
+    fix = fix_change(s)
     return tuple(Mitigation(app=f.target, asg=scales[-1].attrs.get("asg", f"{f.target}-v001"),
                             prop=prop.attrs["property"], at_utc=cut + off,
                             reset_utc=cut + off + MITIGATION_RESET_AFTER, floor=floor,
                             bumped_to=MITIGATION_MIN)
-                 for off in MITIGATION_OFFSETS if cut + off < s.window.end_utc)
+                 for off in MITIGATION_OFFSETS if cut + off < s.window.end_utc
+                 and (include_after_fix or fix is None or cut + off < fix.at_utc))

@@ -145,6 +145,7 @@ agent = create_deep_agent(
 - The graph is the interface. Specialists don't return prose to each other. Each calls `record_finding`, which writes an `ops:Finding` into its own named graph, typed against the ontology and validated by SHACL, about an `ops:Application` with evidence prov ids. The orchestrator reads findings with `read_findings`, assembles chains, and runs the refutation pass itself (topology plus timing checks). This is the post's "each specialist learns one vocabulary" design, and it keeps a flash model's output inside a closed contract.
 - Output. A structured `response_format` with ranked hypotheses, each with a causal chain of URIs and evidence prov ids.
 - Evals. Run all seeded scenarios. Score top-1 and top-3 root cause accuracy, evidence precision (cited ids that are in the answer key), and trap rate (picked a red herring). Two ablations prove the graph earns its keep. Agent over raw files only, and correlation engine without topology gating.
+  - *Note (2026-11-08):* in eval run `recovery-1run` (one run per arm), `raw_only` (the agent over raw files only) reached 7/7 top-1, like the graph arms. So "the ablations prove the graph earns its keep" no longer holds as stated for the agent: on this data only the engine ablation (2/7 without topology gating) shows the graph's effect. One run is not enough to rank the agent arms; repeat with `--runs 3` before drawing a conclusion.
 
 ## 8. Build order (each unit ends in a check)
 

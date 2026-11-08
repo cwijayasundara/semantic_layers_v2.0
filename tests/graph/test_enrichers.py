@@ -252,7 +252,8 @@ def test_changes_follow_the_core_header_conventions(harvested_hero, preprocessed
     assert set(answers["external_ids"]) <= set(ids)           # each scenario change, by external id
     assert not any(r["id"].startswith("chg-") for r in rows)  # no scenario ids (R22)
     kinds = Counter(r["kind"] for r in rows)
-    assert kinds["scaling"] == 10 and kinds["config_change"] == 6   # every ASG / property line
+    # every ASG / property line: 4 of each scaling and 1 config change are the post-cutoff fix
+    assert kinds["scaling"] == 14 and kinds["config_change"] == 7
     ext = {v: k for k, v in answers["external_ids"].items()}
     dep = {r["id"]: r for r in rows}[ext["chg-dep-0001"]]     # the api-gateway deploy
     assert dep["t"] == "2026-10-14T22:18:00Z"                 # SUCCEEDED, not RUNNING (22:14)
@@ -291,8 +292,9 @@ def test_traces_edges_cover_every_span(harvested_hero, preprocessed_hero):
     assert rows and all(r["k"] == "1" for r in rows)
 
 
-def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
-    """(nodes checked, {node: (ops:count, rows its selectors select)} where the two differ)."""
+def fingerprint_count_mismatches(store, proc, as_of=None) -> tuple[int, dict]:
+    """(nodes checked, {node: (ops:count, rows its selectors select)} where the two differ).
+    An as-of store's selectors resolve as of its cutoff (`as_of`)."""
     rows = q(store, "SELECT ?x ?sel ?n WHERE { ?x a ?c ; ops:rawSelector ?sel ; ops:count ?n "
                     "VALUES ?c { ops:LogSpike ops:MetricSeries trc:TraceEdge "
                     "ops:TraceEdgeFingerprint ops:LogPattern } "
@@ -301,7 +303,7 @@ def fingerprint_count_mismatches(store, proc) -> tuple[int, dict]:
     for r in rows:
         sels[r["x"]].add(r["sel"])
         count[r["x"]] = int(r["n"])
-    got = selected_counts(proc, [s for v in sels.values() for s in v])
+    got = selected_counts(proc, [s for v in sels.values() for s in v], as_of=as_of)
     bad = {x: (count[x], sum(got[s] for s in v)) for x, v in sels.items()
            if sum(got[s] for s in v) != count[x]}
     return len(sels), bad
@@ -341,8 +343,8 @@ def test_a_failed_trace_magnitude_is_its_peak_excess_in_binomial_sigmas():
 
 @pytest.mark.parametrize("store", ["harvested_hero", "harvested_hero_as_of"])
 def test_fingerprint_counts_equal_their_selectors(request, preprocessed_hero, store):
-    n, bad = fingerprint_count_mismatches(request.getfixturevalue(store).store,
-                                          preprocessed_hero.proc)
+    h = request.getfixturevalue(store)
+    n, bad = fingerprint_count_mismatches(h.store, preprocessed_hero.proc, h.as_of)
     assert n > 1000 and bad == {}
 
 

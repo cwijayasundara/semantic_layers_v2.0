@@ -551,8 +551,10 @@ def _reaches(uris: list[str], evidence_ids: set[str]) -> set[str]:
     """The cited URIs whose raw records (their own, or those of what they derive from or
     cite) include an answer-key evidence record."""
     from e2ekg.graph.store import Store
+    from e2ekg.preprocess.asof import live_cutoff
     from e2ekg.preprocess.selector import selected_raw_ids
     store, proc = Store(Path("data/graph/hero/as_of/store"), read_only=True), Path("data/processed/hero")
+    as_of = live_cutoff(proc).as_of
     hits = set()
     for u in uris:
         if not u.startswith("https://kg.local/"):
@@ -562,7 +564,7 @@ def _reaches(uris: list[str], evidence_ids: set[str]) -> set[str]:
             f"SELECT DISTINCT ?v WHERE {{ <{u}> (prov:wasDerivedFrom|ops:cites)* ?x . "
             "?x ops:rawSelector ?v }")]
         ids = {v for v in vals if not v.startswith("{")}
-        ids |= selected_raw_ids(proc, [v for v in vals if v.startswith("{")])
+        ids |= selected_raw_ids(proc, [v for v in vals if v.startswith("{")], as_of=as_of)
         if ids & evidence_ids:
             hits.add(u)
     return hits

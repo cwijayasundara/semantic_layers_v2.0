@@ -11,7 +11,12 @@ source-specific key and a half-open time window `[t_start, t_end)` on `ts_utc`:
 
 `select` resolves a selector with DuckDB over `<proc>/derived/rows_<source>.parquet`,
 which holds one row per parsed row (spans: per span) with its key. A fingerprint's
-count therefore equals `select(...).height` by construction."""
+count therefore equals `select(...).height` by construction.
+
+A selector of an as-of store resolves with `as_of=` its cutoff: log rows are then those of
+`asof.scan(proc, "derived/rows_logs", as_of)`, the lines observable at the cutoff keyed by
+the templates mined from them alone (see `asof`). Metric and span keys do not depend on
+other rows, so those sources read the full rows tables either way."""
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -68,8 +73,10 @@ _SEL_SCHEMA = {"selector": pl.String, "app_uri": pl.String, "key": pl.String,
                "t_start": pl.Datetime("us", "UTC"), "t_end": pl.Datetime("us", "UTC")}
 
 
-def _join(proc_root: Path, selectors: list[str], projection: str, tail: str = "") -> list:
-    """Per source, `SELECT <projection> FROM rows r JOIN selectors s ON _MATCHES <tail>`."""
+def _join(proc_root: Path, selectors: list[str], projection: str, tail: str = "",
+          as_of: datetime | None = None) -> list:
+    """Per source, `SELECT <projection> FROM rows r JOIN selectors s ON _MATCHES <tail>`;
+    with `as_of`, the log rows are the as-of view's."""
     by_source: dict[str, list[dict]] = {}
     for s in sorted(set(selectors)):
         x = Selector.from_json(s)
@@ -83,9 +90,15 @@ def _join(proc_root: Path, selectors: list[str], projection: str, tail: str = ""
     try:
         for source, rows in sorted(by_source.items()):
             con.register("sel", pl.DataFrame(rows, schema=_SEL_SCHEMA).to_arrow())
-            # the path is interpolated; every selector value arrives as a registered column
-            rows_file = rows_path(proc_root, source).as_posix()
-            out.append(con.sql(f"SELECT {projection} FROM read_parquet('{rows_file}') r "
+            if as_of is not None and source == "logs":
+                from e2ekg.preprocess.asof import scan
+                con.register("asof_rows", scan(proc_root, "derived/rows_logs", as_of)
+                             .collect().to_arrow())
+                table = "asof_rows"
+            else:
+                # the path is interpolated; every selector value arrives as a registered column
+                table = f"read_parquet('{rows_path(proc_root, source).as_posix()}')"
+            out.append(con.sql(f"SELECT {projection} FROM {table} r "
                                f"JOIN sel s ON {_MATCHES} {tail}").to_arrow_table())
             con.unregister("sel")
     finally:
@@ -93,8 +106,8 @@ def _join(proc_root: Path, selectors: list[str], projection: str, tail: str = ""
     return out
 
 
-def select(proc_root: Path, sel: Selector) -> pl.DataFrame:
-    (rows,) = _join(proc_root, [sel.to_json()], "r.*")
+def select(proc_root: Path, sel: Selector, as_of: datetime | None = None) -> pl.DataFrame:
+    (rows,) = _join(proc_root, [sel.to_json()], "r.*", as_of=as_of)
     return pl.from_arrow(rows)
 
 
@@ -102,30 +115,35 @@ def minute_end(t: datetime) -> datetime:
     return t + timedelta(minutes=1)
 
 
-def selected_raw_ids(proc_root: Path, selectors: list[str]) -> set[str]:
+def selected_raw_ids(proc_root: Path, selectors: list[str],
+                     as_of: datetime | None = None) -> set[str]:
     """Raw ids of every row any of `selectors` (JSON) selects, in one join per source."""
     out: set[str] = set()
-    for t in _join(proc_root, selectors, "DISTINCT r.raw_id"):
+    for t in _join(proc_root, selectors, "DISTINCT r.raw_id", as_of=as_of):
         out |= set(t.column("raw_id").to_pylist())
     return out
 
 
 def earliest_raw_ids(proc_root: Path, selectors: list[str], limit: int,
-                     before: datetime) -> list[tuple[str, datetime]]:
+                     before: datetime, as_of: datetime | None = None
+                     ) -> list[tuple[str, datetime]]:
     """The `limit` earliest (raw id, time of its first row) that any of `selectors` (JSON)
-    selects among rows stamped strictly before `before`."""
+    selects among rows stamped strictly before `before` (`as_of`: see the module doc)."""
     cut = before.astimezone(UTC).isoformat()
     tail = (f"WHERE r.ts_utc < TIMESTAMPTZ '{cut}' GROUP BY r.raw_id "
             f"ORDER BY MIN(r.ts_utc), r.raw_id LIMIT {int(limit)}")
     found: list[tuple[str, datetime]] = []
-    for t in _join(proc_root, selectors, "r.raw_id AS raw_id, MIN(r.ts_utc) AS ts", tail):
+    for t in _join(proc_root, selectors, "r.raw_id AS raw_id, MIN(r.ts_utc) AS ts", tail,
+                   as_of=as_of):
         found += zip(t.column("raw_id").to_pylist(), t.column("ts").to_pylist(), strict=True)
     return sorted(found, key=lambda x: (x[1], x[0]))[:limit]
 
 
-def selected_counts(proc_root: Path, selectors: list[str]) -> dict[str, int]:
+def selected_counts(proc_root: Path, selectors: list[str],
+                    as_of: datetime | None = None) -> dict[str, int]:
     """Rows each selector (JSON) selects, zero included, in one join per source."""
     out = dict.fromkeys(selectors, 0)
-    for t in _join(proc_root, selectors, "s.selector, COUNT(*) AS n", "GROUP BY s.selector"):
+    for t in _join(proc_root, selectors, "s.selector, COUNT(*) AS n", "GROUP BY s.selector",
+                   as_of=as_of):
         out.update(zip(t.column("selector").to_pylist(), t.column("n").to_pylist(), strict=True))
     return out

@@ -148,3 +148,17 @@ def test_a_view_with_a_gap_maps_each_segment_to_its_own_original_offsets(raw_tre
     view = {"events/properties.log": [[0, 0, 3], [3, 6, 3]]}
     hit = evidence_checker(KEY, raw=raw_tree / "view", view=view)
     assert hit("events/properties.log:2") and not hit("events/properties.log:1")
+
+
+def test_a_graph_citation_resolves_its_log_selectors_as_of_the_cutoff(harvested_hero_as_of):
+    """The as-of store's log patterns are keyed by templates mined before the cutoff; the
+    checker resolves their selectors against those lines, not the full window's keys."""
+    from helpers import asof_only_pattern
+
+    from e2ekg.graph.enricher import node
+    h = harvested_hero_as_of
+    app, tid, _, ids = asof_only_pattern(h.proc, h.as_of)
+    key = {"evidence_raw_ids": [ids[-1]]}
+    pattern = str(node("log", "pattern", "hero", app, tid))
+    assert evidence_checker(key, store=h.store, proc=h.proc, as_of=h.as_of)(pattern)
+    assert not evidence_checker(key, store=h.store, proc=h.proc)(pattern)   # full-window keys

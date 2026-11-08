@@ -15,6 +15,9 @@ def _t(h: int, m: int, s: int = 0):
 
 _DESIRED = (48, 40, 32, 24, 16, 12)
 _PREVIOUS = (56, 48, 40, 32, 24, 16)
+# The real fix, after the cutoff: the property reverted 12 -> 48, then the ASG scales out.
+_FIX_ID = "chg-cfg-0002"
+_FIX_CAPS = (12, 24, 36, 48, 56)
 _BG_TIMES = [(12, 40), (13, 25), (14, 5), (15, 8), (15, 14), (15, 17), (16, 10), (17, 2)]
 
 
@@ -23,7 +26,8 @@ def hero_scenario(seed: int = 7) -> Scenario:
     edges = hero_edges(catalog)
     window = Window(start_utc=_t(12, 0), end_utc=_t(18, 0), metric_step_s=60)
     fault = Fault(kind="capacity_reduction", target="title-metadata-svc",
-                  start_utc=_t(14, 52), trigger_change_id="chg-cfg-0001")
+                  start_utc=_t(14, 52), trigger_change_id="chg-cfg-0001",
+                  fix_change_id=_FIX_ID)
 
     changes = [Change(
         id="chg-cfg-0001", kind="config_change", app="title-metadata-svc", at_utc=_t(14, 52),
@@ -45,6 +49,17 @@ def hero_scenario(seed: int = 7) -> Scenario:
         Change(id="chg-dep-0001", kind="deployment", app="api-gateway", at_utc=_t(15, 18),
                attrs={"version": "api-gateway-v7.31.2", "strategy": "red-black"}, is_root_cause=False),
     ]
+    fix = Change(
+        id=_FIX_ID, kind="config_change", app="title-metadata-svc", at_utc=_t(17, 20),
+        attrs={"property": "title-metadata-svc.asg.minInstances", "old": "12", "new": "48"},
+        is_root_cause=False)
+    changes.append(fix)
+    for k, (prev, des) in enumerate(zip(_FIX_CAPS, _FIX_CAPS[1:])):
+        changes.append(Change(
+            id=f"chg-asg-{7 + k:04d}", kind="scaling", app="title-metadata-svc",
+            at_utc=_t(17, 21 + 2 * k),
+            attrs={"asg": "title-metadata-svc-v042", "previous_capacity": str(prev),
+                   "desired_capacity": str(des)}, is_root_cause=False))
     chain_apps = {"title-metadata-svc", "title-batch-loader", "lolomo-svc", "client-tv",
                   "homepage-graphql", "row-ranker", "client-android", "api-gateway"}
     changes += background_changes(catalog, edges, np.random.default_rng(seed + 2), chain_apps,
@@ -67,9 +82,11 @@ def hero_scenario(seed: int = 7) -> Scenario:
         ChainLink(signal="alert", app="homepage-graphql", at_utc=alert_at),
         ChainLink(signal="incident", app="homepage-graphql", at_utc=alert_at + INCIDENT_AFTER_ALERT),
     )
+    fixed = propagate(fault, edges, window, fixed_utc=fix.at_utc)
     key = AnswerKey(root_cause_change_id="chg-cfg-0001", causal_chain=chain,
                     red_herring_change_ids=("chg-exp-0001", "chg-rel-0001", "chg-dep-0001"),
-                    evidence_tags=evidence_tags(chain))
+                    evidence_tags=evidence_tags(chain), fix_change_id=_FIX_ID,
+                    recovered_utc=max(d.end_utc for d in fixed))
     history = build_history(catalog, edges, np.random.default_rng(seed + 1), 90, window.start_utc)
     return Scenario(name="hero", seed=seed, catalog=catalog, edges=edges, window=window,
                     fault=fault, changes=tuple(changes), history=history, answer_key=key)

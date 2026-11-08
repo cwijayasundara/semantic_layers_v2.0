@@ -419,7 +419,7 @@ BEATS: tuple[tuple[int, int, int, object, str, int | None, str], ...] = (
         20,
         0,
         12,
-        "owner approved. revert is staged, applying at 17:55 with the warm-up plan",
+        "owner approved, applying the revert now with the warm-up plan",
         45,
         MITIGATION,
     ),
@@ -429,8 +429,8 @@ BEATS: tuple[tuple[int, int, int, object, str, int | None, str], ...] = (
         45,
         0,
         "lead",
-        "status: TMS capacity was cut by a fast property, revert going out "
-        "shortly, TTR still elevated on all four platforms",
+        "status: TMS capacity was cut by a fast property, revert is out, "
+        "TMS back at 56 and TTR recovering",
         None,
         VERDICT,
     ),

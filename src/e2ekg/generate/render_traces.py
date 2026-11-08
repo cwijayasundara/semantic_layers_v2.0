@@ -16,7 +16,7 @@ import numpy as np
 
 from e2ekg.generate.mess.traces import head_sampled
 from e2ekg.generate.records import RawRecord
-from e2ekg.generate.world import BASE_ERROR, World, epoch, ramp, tags, utc
+from e2ekg.generate.world import BASE_ERROR, World, epoch, recovery_rng, tags, utc
 from e2ekg.scenario.model import Scenario
 from e2ekg.scenario.propagation import Degradation
 
@@ -194,8 +194,42 @@ def _fail_msg(w: World, app: str) -> str:
     return _FAIL_MSG[kinds[0]] if kinds else "INTERNAL: unexpected error"
 
 
+def _outcomes(w: World, apps: list[str], t: np.ndarray, u: np.ndarray):
+    """Per request: shed?, failed?, and the per-app failure weights."""
+    n = len(t)
+    perr = np.stack([w.error_p(a, t) for a in apps] + [np.full(n, BASE_ERROR)])
+    shed = w.shed_p(EDGE, t)
+    is_shed = u < shed
+    return is_shed, (~is_shed) & (u < shed + perr.sum(axis=0)), perr
+
+
+def _spans(w: World, b: _Builder, root: Node, apps: list[str], tid: str, ti: float,
+           shed: bool, err: bool, col: np.ndarray, miss_target: bool):
+    rng = b.rng
+    if shed:
+        return [(EDGE, b.host(EDGE), {
+            "traceId": tid, "spanId": b.span_id(), "parentSpanId": "",
+            "name": "POST /graphql", "kind": 2, "start": utc(ti), "end": utc(ti + 0.002),
+            "attributes": {"http.method": "POST", "http.route": "/graphql",
+                           "http.status_code": 503},
+            "status": {"code": 2, "message": "load shed (503)"}})]
+    fail = None
+    if err:
+        k = min(int(np.searchsorted(np.cumsum(col), rng.random() * col.sum())), len(apps))
+        fail = apps[k] if k < len(apps) else apps[int(rng.integers(len(apps)))]
+    miss = CACHE_MISS + (0.65 * float(w.fault_ramp(ti, epoch(w.scenario.fault.start_utc)))
+                         if miss_target else 0.0)
+    return b.build(tid, root, ti, fail, _fail_msg(w, fail) if fail else "", miss)
+
+
 def _route_traces(w: World, b: _Builder, rng, route: str, root: Node, pop: Population,
-                  ev_apps: set[str], ev_since: float | None):
+                  ev_apps: set[str], ev_since: float | None,
+                  fixed: tuple[World, _Builder, float] | None = None):
+    """`w`/`b` are the world without the fix and the renderer's own stream, which
+    every request consumes exactly as with no fix. With `fixed` = (world with the
+    fix, builder on the recovery rng, time the worlds part), requests from that
+    time on are also drawn there (outcomes from the same uniform), and that
+    rendering is the one kept."""
     apps = sorted(_apps(root))
     target = w.scenario.fault.target
     sc = 1.0 if target is not None and target in _apps(root) else w.scale
@@ -204,12 +238,11 @@ def _route_traces(w: World, b: _Builder, rng, route: str, root: Node, pop: Popul
     counts = rng.poisson(rate * w.step)
     t = np.sort(np.repeat(m, counts) + rng.random(int(counts.sum())) * w.step)
     n = len(t)
-    perr = np.stack([w.error_p(a, t) for a in apps] + [np.full(n, BASE_ERROR)])
-    p_total = perr.sum(axis=0)
-    shed = w.shed_p(EDGE, t)
     u = rng.random(n)
-    is_shed = u < shed
-    is_err = (~is_shed) & (u < shed + p_total)
+    is_shed, is_err, perr = _outcomes(w, apps, t, u)
+    if fixed is not None:
+        wf, bf, split = fixed
+        f_shed, f_err, f_perr = _outcomes(wf, apps, t, u)
     raw = rng.bytes(16 * n).hex()
     miss_target = (target in _apps(root) and w.scenario.fault.kind == "cache_eviction_storm")
     stats = {"considered": n, "kept_head": 0, "kept_error": 0}
@@ -217,27 +250,20 @@ def _route_traces(w: World, b: _Builder, rng, route: str, root: Node, pop: Popul
     taken_bucket: set[int] = set()
     for i in range(n):
         tid = raw[32 * i:32 * i + 32]
-        has_error = bool(is_shed[i] or is_err[i])
-        if not head_sampled(tid, has_error):
-            continue
         ti = float(t[i])
-        if is_shed[i]:
+        shed, err = bool(is_shed[i]), bool(is_err[i])
+        if head_sampled(tid, shed or err):
+            spans = _spans(w, b, root, apps, tid, ti, shed, err, perr[:, i], miss_target)
+        if fixed is not None and ti >= split:
+            shed, err = bool(f_shed[i]), bool(f_err[i])
+            if not head_sampled(tid, shed or err):
+                continue
+            spans = _spans(wf, bf, root, apps, tid, ti, shed, err, f_perr[:, i], miss_target)
+        elif not head_sampled(tid, shed or err):
+            continue
+        has_error = shed or err
+        if shed:
             pop.traces_shed += 1
-            spans = [(EDGE, b.host(EDGE), {
-                "traceId": tid, "spanId": b.span_id(), "parentSpanId": "",
-                "name": "POST /graphql", "kind": 2, "start": utc(ti), "end": utc(ti + 0.002),
-                "attributes": {"http.method": "POST", "http.route": "/graphql",
-                               "http.status_code": 503},
-                "status": {"code": 2, "message": "load shed (503)"}})]
-        else:
-            fail = None
-            if is_err[i]:
-                col = perr[:, i]
-                k = min(int(np.searchsorted(np.cumsum(col), rng.random() * col.sum())), len(apps))
-                fail = apps[k] if k < len(apps) else apps[int(rng.integers(len(apps)))]
-            miss = CACHE_MISS + (0.65 * float(ramp(ti, epoch(w.scenario.fault.start_utc)))
-                                 if miss_target else 0.0)
-            spans = b.build(tid, root, ti, fail, _fail_msg(w, fail) if fail else "", miss)
         evidence = False
         if (not has_error and ev_since is not None and ti >= ev_since and ev_apps <= _apps(root)):
             bucket = int((ti - ev_since) // EVIDENCE_BUCKET_S)
@@ -266,6 +292,13 @@ def render_traces(scenario: Scenario, degradations: tuple[Degradation, ...],
                   population: Population | None = None) -> list[RawRecord]:
     w = World(scenario, degradations, scale)
     pop = population if population is not None else Population()
+    fixed = None
+    ends = [epoch(d.end_utc) for d in degradations if d.end_utc is not None]
+    if ends:  # recovery: the main stream runs as without the fix (see _route_traces)
+        wf = w
+        w = World(scenario, tuple(d.model_copy(update={"end_utc": None})
+                                  for d in degradations), scale)
+        fixed = (wf, _Builder(wf, recovery_rng(scenario, "traces")), min(ends))
     b = _Builder(w, rng)
     slow = {app: epoch(at) for app, at in w.links("slow_trace").items()}
     ev_since = min(slow.values()) if slow else None
@@ -276,7 +309,7 @@ def render_traces(scenario: Scenario, degradations: tuple[Degradation, ...],
             continue
         root = Node(EDGE, [_tree(w, entry, route)])
         for ti, spans, evidence in _route_traces(w, b, rng, route, root, pop, set(slow),
-                                                 ev_since):
+                                                 ev_since, fixed):
             rel = f"traces/otlp/{w.hhmm(ti)}.jsonl"
             if evidence:
                 per_app: dict[tuple[str, str], list[dict]] = {}

@@ -30,6 +30,7 @@ from langgraph.errors import GraphRecursionError
 from e2ekg.agent.report import RCAReport
 from e2ekg.agent.specialists import build_specialists, prompt
 from e2ekg.agent.tools import make_tools
+from e2ekg.agent.trail import Trail, findings_of
 from e2ekg.graph.store import Store, graph_uri
 from e2ekg.llm import MODEL_ID, REQUEST_TIMEOUT_S
 
@@ -75,11 +76,13 @@ def commander_prompt(with_evidence_tool: bool = True) -> str:
 def build_autorca(store: Store, proc_root: Path, scenario: str,
                   model: str | BaseChatModel = f"fireworks:{MODEL_ID}", *, llm=None,
                   as_of: datetime | None = None, evidence_root: Path | None = None,
-                  gate: bool = True, with_evidence_tool: bool = True):
-    """The compiled agent over a private copy of `store` (the as-of store). `llm` lets the
+                  gate: bool = True, with_evidence_tool: bool = True,
+                  work: Store | None = None):
+    """The compiled agent over a private copy of `store` (the as-of store), or over `work`
+    when the caller made the copy and wants to read it afterwards. `llm` lets the
     tools read nicknames; `as_of` is the store's cutoff; `/evidence/` maps to `evidence_root`
     (default: a new temporary directory); `gate` is the correlation engine's gate."""
-    work = _private_copy(store)
+    work = work if work is not None else _private_copy(store)
     chat = harnessed(model)
     tools = make_tools(work, proc_root, scenario, "autorca", llm=llm, as_of=as_of, gate=gate)
     names = [n for n in COMMANDER_TOOLS if with_evidence_tool or n != EVIDENCE_TOOL]
@@ -97,27 +100,33 @@ def build_autorca(store: Store, proc_root: Path, scenario: str,
 def run_rca(alert_id: str, scenario: str, *, root: Path = Path("data"),
             model: str | BaseChatModel = f"fireworks:{MODEL_ID}", llm=None,
             evidence_root: Path | None = None, callbacks: list | None = None,
-            gate: bool = True, with_evidence_tool: bool = True) -> RCAReport:
+            gate: bool = True, with_evidence_tool: bool = True,
+            trail: Trail | None = None) -> RCAReport:
     """Investigate `alert_id` over <root>/graph/<scenario>/as_of. `llm` defaults to the
     cached Fireworks client (the Resolver's nickname reader). A run that hits the recursion
-    limit or ends without a report returns a FailedRCA."""
+    limit or ends without a report returns a FailedRCA. A `trail` records the tool calls (it
+    joins the callbacks) and, when the run ends, the findings the specialists recorded."""
     graph = Path(root) / "graph" / scenario / "as_of"
     as_of = datetime.fromisoformat(json.loads((graph / "harvest.json").read_text())["as_of"])
     if llm is None:
         from e2ekg.llm import FireworksClient
         llm = FireworksClient()
     with tempfile.TemporaryDirectory(prefix="autorca-") as scratch:
-        agent = build_autorca(Store(graph / "store", read_only=True),
-                              Path(root) / "processed" / scenario, scenario, model, llm=llm,
+        work = _private_copy(Store(graph / "store", read_only=True))
+        agent = build_autorca(work, Path(root) / "processed" / scenario, scenario, model, llm=llm,
                               as_of=as_of, evidence_root=evidence_root or Path(scratch),
-                              gate=gate, with_evidence_tool=with_evidence_tool)
+                              gate=gate, with_evidence_tool=with_evidence_tool, work=work)
+        callbacks = [*(callbacks or []), *([trail] if trail else [])]
         try:
             out = agent.invoke(
                 {"messages": [HumanMessage(f"Alert {alert_id} fired. Find its root cause and "
                                            "return the RCAReport.")]},
-                config={"recursion_limit": RECURSION_LIMIT, "callbacks": callbacks or []})
+                config={"recursion_limit": RECURSION_LIMIT, "callbacks": callbacks})
         except GraphRecursionError:
             return failed(f"GraphRecursionError: no report within {RECURSION_LIMIT} steps")
+        finally:
+            if trail is not None:
+                trail.findings = findings_of(work, scenario)
     report = out.get("structured_response")
     return report if report is not None else failed(
         "no structured response: the agent stopped without returning an RCAReport")

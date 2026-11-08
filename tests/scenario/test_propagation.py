@@ -67,3 +67,44 @@ def test_deterministic_and_within_window():
     w = hero_window()
     assert all(w.start_utc <= x.start_utc < w.end_utc for x in run()[1])
     assert timedelta(0) < hero_window().end_utc - hero_window().start_utc
+
+
+def test_no_fix_is_unchanged():
+    e = hero_edges(hero_catalog(rng(7)))
+    base = propagate(hero_fault(), e, hero_window())
+    again = propagate(hero_fault(), e, hero_window(), fixed_utc=None)
+    assert base == again
+    assert base and all(x.end_utc is None for x in base)
+
+
+def _fixed():
+    fixed = pt(2026, 10, 14, 16, 0)
+    e = hero_edges(hero_catalog(rng(7)))
+    return fixed, propagate(hero_fault(), e, hero_window(), fixed_utc=fixed)
+
+
+def test_recovery_order_mirrors_onset():
+    from e2ekg.scenario.propagation import (HOP_LAG_S, LOAD_SHED_AFTER_CLIENTS_S,
+                                            RECOVERY_DELAY_S)
+    fixed, d = _fixed()
+    f = hero_fault()
+    base = fixed + timedelta(seconds=RECOVERY_DELAY_S[f.kind])
+    target = next(x for x in d if x.app == f.target)
+    assert target.end_utc == base
+    others = [x for x in d if x.app != f.target and x.kind != "load_shed"]
+    assert others and all(x.end_utc > target.end_utc for x in others)
+    # mirrors onset: end - start offset is constant for non-shed degradations
+    for x in others:
+        lag = (x.end_utc - base).total_seconds()
+        assert lag == (x.start_utc - target.start_utc).total_seconds()
+        assert lag in {sum(HOP_LAG_S[:i]) for i in range(len(HOP_LAG_S) + 1)}
+    client_end = max(x.end_utc for x in others if x.app.startswith("client-"))
+    for s in (x for x in d if x.kind == "load_shed"):
+        assert s.end_utc == client_end + timedelta(seconds=LOAD_SHED_AFTER_CLIENTS_S)
+    deeper = sorted((x for x in others), key=lambda x: x.start_utc)
+    assert [x.end_utc for x in deeper] == sorted(x.end_utc for x in deeper)
+
+
+def test_end_after_start():
+    _, d = _fixed()
+    assert d and all(x.end_utc > x.start_utc for x in d)

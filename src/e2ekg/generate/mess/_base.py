@@ -7,7 +7,7 @@ together let Task 6 tests find the record and check the undo."""
 import json
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -18,6 +18,13 @@ from e2ekg.generate.records import RawRecord
 from e2ekg.scenario.model import Scenario
 
 Phase = Literal["structured", "bytes"]
+Origin = Literal["recovery", "baseline", "mixed"]
+# Tags the post-cutoff records of a fixed scenario's render while they are messed
+# next to the baseline's records (generate/run.py). An injector that places a
+# change by position inside a series (where it drifts, where it resets) places
+# it from the other records alone, so these get it where the baseline had it.
+RECOVERY_TAG = "_recovery"
+_ORIGIN = {True: "recovery", False: "baseline"}
 Result = tuple[list[RawRecord], list["MessInjection"]]
 
 
@@ -26,6 +33,11 @@ class MessInjection:
     injector_id: str
     rel_path: str
     detail: str
+    # Which records it corrupted, by RECOVERY_TAG: "recovery" (all tagged),
+    # "baseline" (none), "mixed" (records of both, e.g. an interleaved pair), or
+    # None (not stated: stream-wide, or a series/trace run over both). Bookkeeping
+    # for the recovery splice, never written to the manifest.
+    origin: Origin | None = field(default=None, compare=False)
 
 
 class Injector(Protocol):
@@ -65,9 +77,20 @@ class FnInjector:
     def eligible(self, r: RawRecord, fmts: Iterable[str] | None = None) -> bool:
         return r.source in self.sources and (fmts is None or r.fmt in fmts)
 
-    def record(self, rel_path: str, **detail: Any) -> MessInjection:
+    def record(self, rel_path: str, of: Iterable[RawRecord] = (),
+               over: Iterable[RawRecord] = (), **detail: Any) -> MessInjection:
+        """The injection's origin, for the recovery splice: `of`, the records a
+        record-level injection corrupted (one, or a swapped pair: records of both
+        kinds make it "mixed"); `over`, the records a series- or trace-wide one
+        ran over (of both kinds, it is not stated)."""
+        of_tags = {RECOVERY_TAG in r.tags for r in of}
+        over_tags = {RECOVERY_TAG in r.tags for r in over}
+        if of_tags:
+            origin = "mixed" if len(of_tags) > 1 else _ORIGIN[of_tags.pop()]
+        else:
+            origin = _ORIGIN[over_tags.pop()] if len(over_tags) == 1 else None
         return MessInjection(self.id, rel_path, json.dumps(
-            detail, sort_keys=True, ensure_ascii=False, default=_jdefault))
+            detail, sort_keys=True, ensure_ascii=False, default=_jdefault), origin=origin)
 
 
 def injector(id: str, sources: Iterable[str], phase: Phase = "structured"):
@@ -92,6 +115,16 @@ def local_index(recs: list[RawRecord]) -> list[int]:
         out.append(seen.get(r.rel_path, 0))
         seen[r.rel_path] = out[-1] + 1
     return out
+
+
+def base_keys(recs: list[RawRecord], groups: dict) -> list:
+    """The keys of `groups` (key -> record indices) that hold a non-recovery
+    record, in order. Normally all of them; while recovery records are messed
+    next to the baseline (RECOVERY_TAG), a file, stream or series only they
+    have is left out, so a stream-wide injector picks over the baseline's own
+    key list (the same draws, the same choices) and leaves that key alone."""
+    return [k for k, idxs in groups.items()
+            if any(RECOVERY_TAG not in recs[i].tags for i in idxs)]
 
 
 def by_path(recs: list[RawRecord], keep: Callable[[RawRecord], bool]) -> dict[str, list[int]]:

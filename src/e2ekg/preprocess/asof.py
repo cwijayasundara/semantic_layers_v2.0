@@ -15,9 +15,18 @@ observable then, so a store harvested through it cannot hold a later fact.
     that built them, so counts, magnitudes, percentiles and windows are what that
     code would have reported at the cutoff. A window still open at the cutoff ends
     there. Trace edges aggregate whole minutes, so spans of a minute the cutoff
-    cuts into wait for the next one. Keys stay the full window's (template ids,
-    series keys, edge keys), so every selector resolves against the full
-    processed tables.
+    cuts into wait for the next one. Series keys and edge keys stay the full
+    window's: each is a function of its own row, so a later row cannot change it.
+  * Log templates are not: Drain clusters a line with the others it is mined with,
+    so lines after the cutoff would reshape the templates of lines before it (a
+    rare line's template text and id). The as-of view therefore re-mines them with
+    the preprocessing code (`mine_templates`) over the observable log lines alone,
+    and everything keyed by a template follows: `logs` (template_id, template,
+    params), `derived/rows_logs` (key), log buckets and spikes. Adding or changing
+    any line after the cutoff cannot change them. The full tables keep the full
+    window's templates. A log selector of an as-of store therefore names an as-of
+    template id and resolves against `scan(proc, "derived/rows_logs", as_of)`
+    (`selector.select(..., as_of=)`), not the full `rows_logs`.
 
 An unknown table name raises: a table without a rule here cannot reach the
 as-of store by omission.
@@ -29,7 +38,9 @@ window's highest-severity alert (ties: the earliest to fire). An incident create
 before the window is history, never the symptom. `live_cutoff(proc)` is that
 symptom's alert + 30 min: an incident's alert is the one named by its opening page
 (`opening_page`: the last page triggered at or before it opened)."""
+import functools
 import json
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -40,7 +51,7 @@ import polars as pl
 
 from e2ekg.preprocess import selector as sel
 from e2ekg.preprocess.fingerprints import coverage_series
-from e2ekg.preprocess.logtemplates import log_buckets, log_spikes
+from e2ekg.preprocess.logtemplates import log_buckets, log_spikes, mine_templates
 from e2ekg.preprocess.metrics_clean import clean_metrics, metric_anomalies
 from e2ekg.preprocess.traces_repair import aggregate_edges
 
@@ -79,9 +90,55 @@ def _claims(proc: Path, t: datetime) -> pl.LazyFrame:
     return pl.scan_parquet(_path(proc, "derived/chat_claims")).join(seen, on="raw_id", how="semi")
 
 
+_MINING: dict[tuple, threading.Lock] = {}
+_MINING_GUARD = threading.Lock()
+
+
+def _mined(path: Path, stamp: tuple[int, int], t: datetime) -> pl.DataFrame:
+    """`_mine` once per key: concurrent first requests for one scenario wait for one mining
+    instead of each mining the same lines."""
+    with _MINING_GUARD:
+        lock = _MINING.setdefault((path, stamp, t), threading.Lock())
+    with lock:
+        return _mine(path, stamp, t)
+
+
+@functools.lru_cache(maxsize=8)        # one per scenario (seven), with room to spare
+def _mine(path: Path, stamp: tuple[int, int], t: datetime) -> pl.DataFrame:
+    """raw_id, template_id, template, params of the log lines before `t`, mined over those
+    lines alone. `stamp` (mtime, size) keys the cache to the file's contents. Mining is
+    independent of row order: Drain sees the distinct masked messages, sorted."""
+    seen = pl.scan_parquet(path).filter(pl.col("ts_utc") < t).select("raw_id", "msg").collect()
+    return mine_templates(seen).select("raw_id", "template_id", "template", "params")
+
+
+def _observable_templates(proc: Path, t: datetime) -> pl.LazyFrame:
+    path = _path(proc, "logs").resolve()
+    st = path.stat()
+    return _mined(path, (st.st_mtime_ns, st.st_size), t).lazy()
+
+
+def _log_rows(proc: Path, t: datetime) -> pl.LazyFrame:
+    """The observable log rows, their template columns re-mined as of `t`."""
+    lf = _timed("logs")(proc, t)
+    cols = lf.collect_schema().names()
+    return (lf.drop("template_id", "template", "params")
+            .join(_observable_templates(proc, t), on="raw_id", how="left", maintain_order="left")
+            .select(cols))
+
+
+def _log_keys(proc: Path, t: datetime) -> pl.LazyFrame:
+    """`derived/rows_logs` as observable at `t`, keyed by the as-of template ids."""
+    lf = _timed("derived/rows_logs")(proc, t)
+    cols = lf.collect_schema().names()
+    keys = _observable_templates(proc, t).select("raw_id", pl.col("template_id").alias("key"))
+    return (lf.drop("key").join(keys, on="raw_id", how="left", maintain_order="left")
+            .select(cols))
+
+
 def _logs(proc: Path, t: datetime) -> pl.DataFrame:
-    return _timed("logs")(proc, t).select("app_uri", "template_id", "template", "ts_utc",
-                                           "level").collect()
+    return _log_rows(proc, t).select("app_uri", "template_id", "template", "ts_utc",
+                                     "level").collect()
 
 
 def _metric_inputs(proc: Path, t: datetime) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -128,9 +185,11 @@ _DERIVED: dict[str, Callable[[Path, datetime], pl.DataFrame]] = {
 
 _ROWS: dict[str, Callable[[Path, datetime], pl.LazyFrame]] = {
     **{name: _timed(name) for name in (
-        "alerts", "events", "incidents", "logs", "metrics_atlas", "metrics_prom", "pages",
-        "slack", "spans", "derived/rows_logs", "derived/rows_metrics", "derived/rows_spans",
+        "alerts", "events", "incidents", "metrics_atlas", "metrics_prom", "pages",
+        "slack", "spans", "derived/rows_metrics", "derived/rows_spans",
         "derived/chat_messages")},
+    "logs": _log_rows,
+    "derived/rows_logs": _log_keys,
     "catalog": _whole("catalog"),
     "derived/chat_claims": _claims,
 }

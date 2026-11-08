@@ -6,6 +6,7 @@ from itertools import pairwise
 
 from e2ekg.generate.formats import Stamp
 from e2ekg.generate.mess._base import (
+    base_keys,
     by_path,
     injector,
     local_index,
@@ -34,7 +35,7 @@ def _is_log(self, r) -> bool:
 def tz_mix(self, recs, rng, scenario):
     """Some hosts render timestamps in PT (log4j_pt has no offset) or epoch ms."""
     files = by_path(recs, lambda r: _is_log(self, r))
-    paths = list(files)
+    paths = base_keys(recs, files)
     out, inj = list(recs), []
     for k in pick(rng, len(paths), TZ_RATE):
         p = paths[k]
@@ -52,9 +53,10 @@ def tz_mix(self, recs, rng, scenario):
 @injector("log.host_skew", ("logs",))
 def host_skew(self, recs, rng, scenario):
     files = by_path(recs, lambda r: _is_log(self, r) and r.rel_path.startswith(HOST_SKEW_APP_DIR))
-    if not files:
+    paths = sorted(base_keys(recs, files))
+    if not paths:
         return list(recs), []
-    p = sorted(files)[int(rng.integers(len(files)))]
+    p = paths[int(rng.integers(len(paths)))]
     out = list(recs)
     for i in files[p]:
         out[i] = set_fields(out[i], ts=shift_ts(out[i].fields["ts"], HOST_SKEW))
@@ -72,7 +74,8 @@ def truncate(self, recs, rng, scenario):
         pl = recs[i].payload
         cut = int(rng.integers(1, len(pl) - 1))
         out[i] = replace(recs[i], payload=pl[:cut])
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc, cut_at=cut,
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc,
+                               cut_at=cut,
                                original_len=len(pl), removed_hex=pl[cut:].hex()))
     return out, inj
 
@@ -86,7 +89,7 @@ def duplicate(self, recs, rng, scenario):
     for k in pick(rng, len(cands), DUP_RATE):
         i = cands[k]
         after[i] = [recs[i]]
-        inj.append(self.record(recs[i].rel_path, idx=loc[i], at_utc=recs[i].at_utc))
+        inj.append(self.record(recs[i].rel_path, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc))
     return with_inserts(recs, after), inj
 
 
@@ -105,7 +108,7 @@ def interleave(self, recs, rng, scenario):
             continue
         used |= {a, b}
         out[a], out[b] = recs[b], recs[a]
-        inj.append(self.record(recs[a].rel_path, idx_a=loc[a], idx_b=loc[b],
+        inj.append(self.record(recs[a].rel_path, [recs[a], recs[b]], idx_a=loc[a], idx_b=loc[b],
                                at_utc_a=recs[a].at_utc, at_utc_b=recs[b].at_utc))
     return out, inj
 
@@ -135,7 +138,8 @@ def pii(self, recs, rng, scenario):
                 field, out[i] = "msg", set_fields(r, msg=f"{r.fields['msg']} user={email}")
             case _:
                 field, out[i] = "remote_user", set_fields(r, remote_user=email)
-        inj.append(self.record(r.rel_path, idx=loc[i], at_utc=r.at_utc, field=field, value=email))
+        inj.append(self.record(r.rel_path, [r], idx=loc[i], at_utc=r.at_utc, field=field,
+                               value=email))
     return out, inj
 
 
@@ -179,7 +183,7 @@ def encoding(self, recs, rng, scenario):
         else:  # pragma: no cover - guarded by latin1_undecodable
             raise AssertionError(f"log.encoding produced decodable bytes in {p}")
         out[i] = replace(recs[i], payload=enc[i])
-        inj.append(self.record(p, idx=loc[i], at_utc=recs[i].at_utc, from_enc="utf-8",
+        inj.append(self.record(p, [recs[i]], idx=loc[i], at_utc=recs[i].at_utc, from_enc="utf-8",
                                to_enc="latin-1"))
     return out, inj
 

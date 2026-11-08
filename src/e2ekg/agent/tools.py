@@ -10,6 +10,8 @@ cutoff themselves:
   * `raw_evidence` reads the processed tables and the raw files, which hold the whole
     window. It returns a record only when EVERY row parsed from it is stamped before the
     cutoff, whatever the request (a node's selectors, a selector the agent writes, a raw id).
+    Log selectors resolve as of the cutoff (`selector.earliest_raw_ids(..., as_of=)`): their
+    key is a template id of the as-of view, mined from the observable lines alone.
   * `sparql_select` runs on `store` alone. The full store is never joined to it.
 
 Every result is compact JSON of at most CAP characters. A list that does not fit loses its
@@ -670,7 +672,8 @@ def raw_evidence(env: Env, target: str, limit: int) -> str:
         x = sel.Selector.from_json(s)
         clipped.append(sel.Selector(x.source, x.app_uri, x.key, x.t_start,
                                     min(x.t_end, env.as_of)).to_json())
-    found = sel.earliest_raw_ids(env.proc, clipped, 3 * limit, env.as_of) if clipped else []
+    found = (sel.earliest_raw_ids(env.proc, clipped, 3 * limit, env.as_of, as_of=env.as_of)
+             if clipped else [])
     seen = _observable(env, sorted({*ids, *(r for r, _ in found)}))
     order = sorted(seen, key=lambda r: (seen[r] or datetime.min.replace(tzinfo=UTC), r))[:limit]
     out = []

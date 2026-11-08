@@ -93,7 +93,8 @@ def test_the_experiment_landed_into_degradation_the_config_change_explains(named
 
 
 def test_autoscaling_gets_facts_and_shows_the_change_before_it(live, uri):
-    scaling = [uri[c.id] for c in HERO.changes if c.kind == "scaling"]
+    # the scale-in the agent can see; the fix's scale-outs come after the cutoff
+    scaling = [uri[c.id] for c in HERO.changes if c.kind == "scaling" and c.at_utc < live.as_of]
     out = call(live.tools, "candidate_evidence", alert_id="radar-09000", candidate_uris=scaling)
     for row in out["candidates"]:
         assert "error" not in row and row["call_path"] is not None

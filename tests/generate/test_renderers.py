@@ -254,7 +254,7 @@ def test_no_raw_file_contains_a_scenario_change_id(hero, generated_hero):
 
 def test_failed_mitigation_is_in_the_signals(generated_hero):
     asg = [r for r in jsonl(generated_hero / "events/asg.jsonl")
-           if hero_local("16:00") <= _ts(r["ts"]) < hero_local("18:00")]
+           if hero_local("16:00") <= _ts(r["ts"]) < hero_local("17:20")]   # before the fix
     moves = [(_ts(r["ts"]), r["previous_capacity"], r["desired_capacity"]) for r in asg]
     assert [(p, d) for _, p, d in moves] == [(12, 40), (40, 12), (12, 40), (40, 12)]
     assert moves[0][0] == hero_local("16:02") and moves[2][0] == hero_local("16:31")
