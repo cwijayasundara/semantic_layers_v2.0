@@ -65,6 +65,7 @@ LINE_MAX = 1500
 MAX_CHAINS = 5
 EVIDENCE_CAP = 4 * CAP     # facts for several named changes in one call
 BEFORE_SHOWN, SAME_SHOWN = 3, 5
+CITES_SHOWN = 8            # cites per finding read_findings returns (cites_n carries the rest)
 CLAIM_KINDS = ("observation", "hypothesis", "mitigation", "root_cause", "retraction")
 
 OPS, PROV = NS["ops"], NS["prov"]
@@ -764,9 +765,15 @@ def read_findings(env: Env, app: str | None) -> str:
                     OPTIONAL {{ ?f rdfs:comment ?claim }} OPTIONAL {{ ?f ops:cites ?cite }} }}
         {only} FILTER(STRSTARTS(STR(?g), "{prefix}")) }}
         GROUP BY ?f ?g ?app ?claim ?conf ORDER BY ?g ?f LIMIT {LIMIT}""")
-    out = [{"uri": r["f"], "specialist": r["g"][len(prefix):], "app": _app_of(r["app"]),
-            "claim": _clip(r["claim"], 300), "conf": _num(r["conf"], 3),
-            "cites": sorted((r["cites"] or "").split())} for r in rows]
+    out = []
+    for r in rows:
+        cites = sorted((r["cites"] or "").split())
+        row = {"uri": r["f"], "specialist": r["g"][len(prefix):], "app": _app_of(r["app"]),
+               "claim": _clip(r["claim"], 300), "conf": _num(r["conf"], 3),
+               "cites": cites[:CITES_SHOWN]}
+        if len(cites) > CITES_SHOWN:
+            row["cites_n"] = len(cites)
+        out.append(row)
     return _fit(out, capped=len(rows) >= LIMIT)
 
 

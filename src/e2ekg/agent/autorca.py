@@ -1,6 +1,10 @@
 """AutoRCA: a DeepAgents commander that dispatches seven specialists over the graph tools,
 proposes candidate root causes, weighs the facts about each, and returns an RCAReport.
 
+The run opens with the commander's first turns already computed (`prefetch`: the symptom, the
+engine's chains, the window's changes), and the seven specialists it dispatches in one turn
+run concurrently (async invoke).
+
     report = run_rca("radar-09000", "hero")          # reads data/graph/hero/as_of only
 
 The model decides. No tool returns a verdict: `candidate_evidence` reports facts about the
@@ -12,9 +16,10 @@ The agent sees the AS-OF store (R34) and nothing else: `run_rca` opens
 without any findings graph, so what it records never reaches the store on disk and no earlier
 run's findings reach it. It never opens the full store or <root>/raw/_answers. `/evidence/` is
 a fresh temporary directory per run unless the caller names one (R52)."""
+import asyncio
 import json
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from deepagents import (GeneralPurposeSubagentProfile, HarnessProfile, create_deep_agent,
@@ -38,6 +43,46 @@ EVIDENCE_TOOL = "candidate_evidence"
 COMMANDER_TOOLS = ("find_symptom", "changes_in_window", "causal_chains", EVIDENCE_TOOL,
                    "read_findings", "raw_evidence", "sparql_select")
 RECURSION_LIMIT = 200
+PREFETCH_MINUTES = 90        # the brief's window: from this long before the alert to the cutoff
+
+_PREFETCH_NOTE = {
+    "find_symptom": "the symptom: the alert, its application and time, the symptom URI, "
+                    "and the incident it opened",
+    "causal_chains": "the correlation engine's ranked chains for the symptom",
+    "changes_in_window": "every change made in the window, all applications",
+}
+
+
+def prefetch(store: Store, proc_root: Path, scenario: str, alert_id: str, *, llm=None,
+             as_of: datetime | None = None, gate: bool = True) -> dict[str, str]:
+    """The commander's first turns, computed directly (no LLM call): find_symptom's answer,
+    the engine's chains for the symptom, and the changes in the brief's window. The run's
+    opening message carries them, so the commander starts at its step 3. A tool that fails
+    is carried as its own "error: ..." string, exactly as the tool would have answered."""
+    tools = make_tools(store, proc_root, scenario, "autorca", llm=llm, as_of=as_of, gate=gate)
+    out = {"find_symptom": tools["find_symptom"].invoke({"alert_id": alert_id})}
+    try:
+        sym = json.loads(out["find_symptom"])
+    except ValueError:
+        return out
+    start = (datetime.fromisoformat(sym["alert"]["at"].replace("Z", "+00:00"))
+             - timedelta(minutes=PREFETCH_MINUTES)).isoformat()
+    out["causal_chains"] = tools["causal_chains"].invoke({"symptom_uri": sym["symptom_uri"]})
+    out["changes_in_window"] = tools["changes_in_window"].invoke(
+        {"apps": [], "start": start, "end": sym["as_of"]})
+    return out
+
+
+def opening(alert_id: str, pre: dict[str, str]) -> str:
+    """The run's opening message: the brief, plus whatever `prefetch` computed."""
+    msg = f"Alert {alert_id} fired. Find its root cause and return the RCAReport."
+    if not pre:
+        return msg
+    lines = [msg, "", "Prefetched context, computed before you started — use it in place of "
+                      "these calls; repeat one only with different arguments:"]
+    lines += [f"- {name} ({_PREFETCH_NOTE[name]}): {pre[name]}"
+              for name in _PREFETCH_NOTE if name in pre]
+    return "\n".join(lines)
 # Every AutoRCA arm runs under this one profile: exactly the subagents it is given (no
 # auto-added general-purpose one) and no shell.
 HARNESS = HarnessProfile(excluded_tools=frozenset({"execute"}),
@@ -113,15 +158,18 @@ def run_rca(alert_id: str, scenario: str, *, root: Path = Path("data"),
         llm = FireworksClient()
     with tempfile.TemporaryDirectory(prefix="autorca-") as scratch:
         work = _private_copy(Store(graph / "store", read_only=True))
+        pre = prefetch(work, Path(root) / "processed" / scenario, scenario, alert_id, llm=llm,
+                       as_of=as_of, gate=gate)
         agent = build_autorca(work, Path(root) / "processed" / scenario, scenario, model, llm=llm,
                               as_of=as_of, evidence_root=evidence_root or Path(scratch),
                               gate=gate, with_evidence_tool=with_evidence_tool, work=work)
         callbacks = [*(callbacks or []), *([trail] if trail else [])]
         try:
-            out = agent.invoke(
-                {"messages": [HumanMessage(f"Alert {alert_id} fired. Find its root cause and "
-                                           "return the RCAReport.")]},
-                config={"recursion_limit": RECURSION_LIMIT, "callbacks": callbacks})
+            # Async, so the specialists the commander dispatches in one turn run concurrently
+            # (the task tool's coroutine runs them gathered, not one after another).
+            out = asyncio.run(agent.ainvoke(
+                {"messages": [HumanMessage(opening(alert_id, pre))]},
+                config={"recursion_limit": RECURSION_LIMIT, "callbacks": callbacks}))
         except GraphRecursionError:
             return failed(f"GraphRecursionError: no report within {RECURSION_LIMIT} steps")
         finally:

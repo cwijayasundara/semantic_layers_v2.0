@@ -590,3 +590,20 @@ def test_live_models_carry_a_request_timeout(monkeypatch):
     from e2ekg.llm import MODEL_ID, REQUEST_TIMEOUT_S
     chat = harnessed(f"fireworks:{MODEL_ID}")
     assert chat.request_timeout == REQUEST_TIMEOUT_S and chat.max_retries == 3
+
+
+def test_prefetch_computes_the_first_turns_and_the_message_carries_it(
+        harvested_hero_as_of, preprocessed_hero, scripted_llm):
+    from e2ekg.agent.autorca import opening, prefetch
+    h = harvested_hero_as_of
+    pre = prefetch(copy_store(h.store), preprocessed_hero.proc, "hero", ALERT, llm=scripted_llm,
+                   as_of=h.as_of)
+    assert json.loads(pre["find_symptom"])["alert"]["id"] == ALERT
+    chains = json.loads(pre["causal_chains"])
+    assert chains and chains[0]["links"]
+    assert isinstance(json.loads(pre["changes_in_window"]), list)
+    msg = opening(ALERT, pre)
+    assert msg.startswith(f"Alert {ALERT} fired")
+    assert "Prefetched context" in msg and "causal_chains" in msg
+    assert opening(ALERT, {}) == (f"Alert {ALERT} fired. Find its root cause and "
+                                  "return the RCAReport.")
