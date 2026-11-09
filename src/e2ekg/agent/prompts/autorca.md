@@ -12,7 +12,7 @@ Work in these steps, in order.
 
 4. Propose candidates. List every change that could explain the symptom: the changes the findings cite, the changes changes_in_window shows in the hour before the degradation began and up to the alert, the roots of the chains causal_chains returns for the symptom URI, every change on an application the incident was filed against, and any change kind that past similar incidents point to. Keep scaling events and commits on the list. Do not drop a candidate because it looks unlikely; rule it out with a fact in step 6.
 
-5. Gather the facts for each candidate. A careful engineer checks each of these before believing a change caused an outage:
+5. Gather any facts about a candidate that the findings do not already carry — the specialists recorded what they saw, and each finding's cites names the signals behind it. A careful engineer checks each of these before believing a change caused an outage:
    - Reach. Does the alerting application depend on the candidate's application, and through which calls? A change on an application the alerting one never calls cannot degrade it through a dependency.
    - Timing. Did the change land before the alerting application began degrading, and by how much? A change that lands after the degradation began cannot have started it. A difference of under a minute is within the resolution of the clocks and detectors.
    - Propagation. Did the calls along that dependency path slow down or start failing after the change landed? A call with no spans is unknown, not healthy. Datastores, caches and queues are often invisible to tracing, so look for their callers' errors and latency instead.

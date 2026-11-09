@@ -94,11 +94,18 @@ class FailedRCA(RCAReport):
     failure: str
 
 
+REASONING_EFFORT = "low"
+"""GLM-5.3 is a thinking-only model; its open-ended reasoning is what turns a 3 s call
+into a 30 s one (measured: single turns of 17.8-37.9 s with thinking at default). 'low'
+caps the reasoning tokens, the agent loop re-gains deliberation through its tool calls."""
+
+
 def harnessed(model: str | BaseChatModel) -> BaseChatModel:
     """The chat model, with HARNESS registered for it. deepagents keeps profiles in a
     process-global registry keyed provider:model and computes that key with private helpers,
     hence the pinned deepagents version."""
-    chat = (init_chat_model(model, timeout=REQUEST_TIMEOUT_S, max_retries=3)
+    chat = (init_chat_model(model, timeout=REQUEST_TIMEOUT_S, max_retries=3,
+                            extra_body={"reasoning_effort": REASONING_EFFORT})
             if isinstance(model, str) else model)
     register_harness_profile(f"{get_model_provider(chat)}:{get_model_identifier(chat)}", HARNESS)
     return chat
