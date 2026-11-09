@@ -404,6 +404,17 @@ def case(scenario: str, source: str = "") -> dict:
     return out
 
 
+@app.get("/api/scenarios/{scenario}/case/expand")
+def case_expand(scenario: str, uri: str) -> dict:
+    """One hop of the as-of graph around `uri`: the triples that name it, as case-view nodes
+    and edges, so the evidence graph can be walked one claim at a time."""
+    from e2ekg.explain.case import expand_node
+    try:
+        return expand_node(_store(scenario, "as_of"), uri)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.get("/api/scenarios/{scenario}/after")
 def after(scenario: str, source: str = "") -> dict:
     """The run's case, continued past its cut-off: the symptom and chain metrics and the

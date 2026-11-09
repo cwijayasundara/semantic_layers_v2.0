@@ -297,3 +297,43 @@ def test_tool_errors_and_cuts_are_reported(engine_run, live_tools):
 
 def test_no_tool_issues_on_a_clean_case(case):
     assert case["meta"]["tool_issues"] == []
+
+
+def test_hypotheses_carry_per_hypothesis_argument_graphs(engine_run, live_tools):
+    import copy
+    run = copy.deepcopy(engine_run)
+    h0 = run["report"]["hypotheses"][0]
+    other = h0["refuted_alternatives"][0].split(" refuted:", 1)[0].strip()
+    run["report"]["hypotheses"].append(
+        {"root_cause_uri": other, "chain": [other], "confidence": 0.4, "evidence": [other],
+         "refuted_alternatives": [f"{h0['root_cause_uri']} refuted: "
+                                 "landed after the degradation began"]})
+    case = _build(live_tools, run)
+    hyps = case["hypotheses"]
+    assert [h["i"] for h in hyps] == [0, 1]
+    assert hyps[0]["root"] == h0["root_cause_uri"] and hyps[1]["root"] == other
+    ids0 = {n["id"] for n in hyps[0]["nodes"]}
+    assert set(h0["chain"]) <= ids0
+    assert any(e["kind"] == "causal" for e in hyps[0]["edges"])
+    assert any(e["kind"] == "refutes" and e["source"] == other for e in hyps[0]["edges"])
+    h1 = next(n for n in hyps[1]["nodes"] if n["id"] == other)
+    assert "h1:root" in h1["roles"] and h1["confidence"] == 0.4
+    assert hyps[1]["refuted"] and hyps[1]["refuted"][0]["uris"] == [h0["root_cause_uri"]]
+    # the main graph pools every hypothesis's refutations, as before
+    assert _nodes(case)[h0["root_cause_uri"]]["agent_reason"]
+
+
+def test_expand_node_walks_one_hop(case, engine_run, live_tools):
+    from e2ekg.explain.case import expand_node
+    root = _hyp(engine_run)["root_cause_uri"]
+    out = expand_node(live_tools.store, root)
+    assert out["uri"] == root and not out["truncated"]
+    ids = {n["id"] for n in out["nodes"]}
+    assert root in ids
+    assert any(e["source"] == root or e["target"] == root for e in out["edges"])
+    assert all(e["source"] in ids and e["target"] in ids for e in out["edges"])
+    assert any(k.startswith(("chg:", "prov:", "ops:")) for k in (e["kind"] for e in out["edges"]))
+    with pytest.raises(ValueError):
+        expand_node(live_tools.store, "not-a-uri")
+    with pytest.raises(ValueError):
+        expand_node(live_tools.store, "https://example.com/elsewhere")

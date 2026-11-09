@@ -57,6 +57,54 @@ def _rows(out) -> list[dict]:
             for r in out or [] if set(r) - set(_NOTES)]
 
 
+def expand_node(store: Store, uri: str, cap: int = 200) -> dict:
+    """One hop of the union graph around `uri`, as the case view's nodes and edges: every
+    triple that names it, so the evidence graph can be walked one claim at a time. IRI
+    neighbors become nodes (labeled like the case graph's); literal objects stay node props
+    (`props`), so no edge dangles. Raises ValueError for anything but a graph node URI."""
+    u = uri.strip()
+    if not u.startswith(BASE + "/") or not _IRI.fullmatch(u):
+        raise ValueError(f"{uri!r} is not a graph node URI")
+    out_rows = store.query(f"SELECT ?p ?o WHERE {{ <{u}> ?p ?o }} LIMIT {cap + 1}")
+    in_rows = store.query(f"SELECT ?p ?s WHERE {{ ?s ?p <{u}> }} LIMIT {cap + 1}")
+
+    def is_node(x) -> bool:
+        return isinstance(x, str) and "://" in x and bool(_IRI.fullmatch(x))
+
+    neighbors = [r["o"] for r in out_rows if is_node(r["o"])] \
+        + [r["s"] for r in in_rows if is_node(r["s"])]
+    desc = _describe(store, [u, *neighbors])
+
+    def node(x) -> dict:
+        if x in nodes:
+            return nodes[x]
+        d = desc.get(x)
+        n = _node(x, _first(d, _LABEL) or _tail(x), _cat(x),
+                  cls="/".join(sorted(d["types"])) or None if d else None,
+                  app=_app_of(_first(d, _APP_PREDS)), at=_first(d, [_AT]),
+                  props=d["props"] if d else {}, graph=d and d["graph"])
+        nodes[x] = n
+        return n
+
+    nodes: dict[str, dict] = {}
+    d0 = desc.get(u)
+    nodes[u] = _node(u, _first(d0, _LABEL) or _tail(u), _cat(u),
+                     cls="/".join(sorted(d0["types"])) or None if d0 else None,
+                     app=_app_of(_first(d0, _APP_PREDS)), at=_first(d0, [_AT]),
+                     props=d0["props"] if d0 else {}, graph=d0 and d0["graph"])
+    edges: dict[str, dict] = {}
+    for r in out_rows:
+        if is_node(r["o"]):
+            _edge(edges, u, r["o"], _curie(r["p"]))
+            node(r["o"])
+    for r in in_rows:
+        if is_node(r["s"]):
+            _edge(edges, r["s"], u, _curie(r["p"]))
+            node(r["s"])
+    return {"uri": u, "nodes": list(nodes.values()), "edges": list(edges.values()),
+            "truncated": len(out_rows) > cap or len(in_rows) > cap}
+
+
 def signed_hops(store: Store, app: str) -> dict[str, int]:
     """app -> shortest ops:dependsOn depth from `app`: positive down (what it calls), negative
     up (its callers), 0 for the app itself; down wins for an app on both sides. The agent's
@@ -81,6 +129,12 @@ def signed_hops(store: Store, app: str) -> dict[str, int]:
         return depth
 
     return {a: -h for a, h in bfs(up).items()} | bfs(down)
+
+
+def _edge(edges: dict[str, dict], source: str, target: str, kind: str) -> None:
+    edges.setdefault(f"{kind}:{source}->{target}", {"id": f"{kind}:{source}->{target}",
+                                                    "source": source, "target": target,
+                                                    "kind": kind})
 
 
 def _when(s: str) -> datetime:
@@ -229,7 +283,10 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
                                alert["uri"], *([incident["uri"]] if incident else []),
                                *(c["uri"] for c in chat),
                                *(u for f in findings.values() for u in f.get("cites", []))]))
-    desc = _describe(store, uris)
+    hyp_uris = [u for h in hyps
+                for u in ([h["root_cause_uri"]] if h.get("root_cause_uri") else [])
+                + h["chain"] + [e for e in h["evidence"] if e.startswith(BASE + "/")]]
+    desc = _describe(store, [*uris, *hyp_uris])
 
     nodes: dict[str, dict] = {}
     for u in uris:
@@ -286,9 +343,7 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
     edges: dict[str, dict] = {}
 
     def edge(source: str, target: str, kind: str) -> None:
-        edges.setdefault(f"{kind}:{source}->{target}",
-                         {"id": f"{kind}:{source}->{target}", "source": source,
-                          "target": target, "kind": kind})
+        _edge(edges, source, target, kind)
 
     for a, b in zip(chain, chain[1:]):
         edge(a, b, "causal")
@@ -341,6 +396,47 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
             VALUES ?b {{ {values} }} ?a <{NS['ops']['dependsOn']}> ?b }}""") if apps else []:
         edge(r["a"], r["b"], "dependsOn")
 
+    # One argument subgraph per hypothesis: the change, the signals it explains, the evidence
+    # behind it and the alternatives it refutes — the report's URI lists, made walkable.
+    # Raw-id evidence stays a raw id (raw_evidence reads it on click); it makes no node here.
+    symptom_uri = incident["uri"] if incident else alert["uri"]
+    hyp_graphs = []
+    for i, h in enumerate(hyps):
+        root_i = h.get("root_cause_uri")
+        chain_i, evid_i = h["chain"], [u for u in h["evidence"] if u.startswith(BASE + "/")]
+        refuted_i = parse_refuted(h.get("refuted_alternatives", []), set(what))
+        hnodes, hedges = {}, {}
+        for u in list(dict.fromkeys([*([root_i] if root_i else []), *chain_i, *evid_i])):
+            d = desc.get(u)
+            n = _node(u, what.get(u) or _first(d, _LABEL) or _tail(u), _cat(u),
+                      cls="/".join(sorted(d["types"])) or None if d else None,
+                      app=_app_of(_first(d, _APP_PREDS)), at=_first(d, [_AT]),
+                      props=d["props"] if d else {}, graph=d and d["graph"],
+                      missing=d is None and u not in findings)
+            if u == root_i:
+                n["roles"].append(f"h{i}:root")
+                n["confidence"] = h.get("confidence")
+            if u in chain_i:
+                n["roles"].append(f"h{i}:chain")
+            if u in evid_i:
+                n["roles"].append(f"h{i}:evidence")
+            hnodes[u] = n
+        for a, b in zip(chain_i, chain_i[1:]):
+            _edge(hedges, a, b, "causal")
+        if chain_i and symptom_uri not in chain_i:
+            _edge(hedges, chain_i[-1], symptom_uri, "causal")
+        if root_i:
+            for u in evid_i:
+                _edge(hedges, u, root_i, "cites")
+            for r in refuted_i:
+                for u in r.uris:
+                    _edge(hedges, u, root_i, "refutes")
+        hyp_graphs.append({"i": i, "root": root_i, "confidence": h.get("confidence"),
+                           "chain": chain_i, "evidence": h["evidence"],
+                           "refuted": [{"uris": list(r.uris), "reason": r.reason,
+                                        "as_root": r.as_root} for r in refuted_i],
+                           "nodes": list(hnodes.values()), "edges": list(hedges.values())})
+
     meta = {"scenario": scenario, "verdict": report["verdict"], "alert": alert,
             "incident": incident, "as_of": found["as_of"], "onset_at": onset,
             "summary": report.get("summary"), "confidence": top.get("confidence"),
@@ -350,4 +446,4 @@ def build_case(store: Store, tools: dict, scenario: str, run: dict, *,
             "unattributed_notes": [r.reason for r in refuted if not r.uris],
             "tool_issues": list({json.dumps(i, sort_keys=True): i for i in issues}.values())}
     return {"meta": meta, "nodes": list(nodes.values()), "edges": list(edges.values()),
-            "trail": trail}
+            "hypotheses": hyp_graphs, "trail": trail}
