@@ -25,7 +25,8 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     from e2ekg.generate.run import generate_scenario
     for s in _scenarios(args.scenario, args.seed):
         t = time.perf_counter()
-        m = generate_scenario(s, Path(args.out) / s.name, scale=args.scale)
+        m = generate_scenario(s, Path(args.out) / s.name, scale=args.scale,
+                              attribution=args.attribution)
         print(f"{s.name}: {len(m.files)} files, {m.counts.get('logs', 0)} log records, "
               f"{m.counts.get('spans', 0)} spans, {len(m.injections)} injections "
               f"in {time.perf_counter() - t:.1f}s", flush=True)
@@ -39,6 +40,10 @@ def _add_generate(sub) -> None:
     p.add_argument("--out", default="data/raw")
     p.add_argument("--scale", type=float, default=1.0,
                    help="background traffic multiplier for apps off the causal path")
+    p.add_argument("--attribution", choices=("guess", "none", "correct"), default="guess",
+                   help="the live incident's filed affected_services: guess (a wrong early "
+                        "guess, corrected 40 min later; default), none (unattributed), or "
+                        "correct (the true app from the start)")
     p.set_defaults(func=_cmd_generate)
 
 

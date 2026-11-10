@@ -11,10 +11,13 @@ execution id, fast-property change id, ASG activity UUID, A/B allocation id,
 git sha); `external_ids()` is the external -> scenario id map for _answers.
 The failed "bump min to 40" mitigations (world.mitigation_attempts, R23) are
 rendered as an ASG change, the poller's property re-apply and the ASG reset;
-they are renderer-side events, not Scenario changes. The live
+they are renderer-side events, not Scenario changes. the live
 incident's first `affected_services` is a wrong early guess (the latest
-red-herring deployment's app), corrected 40 min later. History incidents get
-incident records and pages at their own historical times."""
+red-herring deployment's app), corrected 40 min later — unless `attribution`
+says otherwise: "none" files the incident unattributed (the on-call knows
+something is wrong, not what), "correct" files the true app from the start.
+History incidents get incident records and pages at their own historical
+times."""
 import hashlib
 from datetime import timedelta
 
@@ -210,7 +213,8 @@ def _page(pid: str, at, app, urgency, title, status, who, tg=frozenset(), key=No
                      at_utc=at, tags=tg, fields=f)
 
 
-def _live(w: World, rng) -> tuple[list[RawRecord], list[RawRecord], list[RawRecord]]:
+def _live(w: World, rng, attribution: str = "guess"
+          ) -> tuple[list[RawRecord], list[RawRecord], list[RawRecord]]:
     s = w.scenario
     alerts, pages, incs = [], [], []
     alert_links, inc_links = w.links("alert"), w.links("incident")
@@ -231,18 +235,27 @@ def _live(w: World, rng) -> tuple[list[RawRecord], list[RawRecord], list[RawReco
     herring_deploys = sorted((by_id[h] for h in s.answer_key.red_herring_change_ids
                               if by_id[h].kind == "deployment"), key=lambda c: c.at_utc)
     for app, at in inc_links.items():
-        guess = herring_deploys[-1].app if herring_deploys else app
         num = live_incident_number(s)
         base = {"id": f"INC-{num}", "severity": "SEV2", "slack_channel": f"#{live_channel(s, app)}",
                 "incident_lead": lead}
-        incs.append(_inc({**base, "event": "incident.created", "ts": at,
-                          "name": "Homepage TTR regression across all platforms"
-                          if app == "homepage-graphql" else f"{app} degradation",
-                          "status": "investigating", "affected_services": [guess]},
-                         tags("incident")))
-        incs.append(_inc({**base, "event": "incident.updated", "ts": at + CORRECTION_AFTER,
-                          "status": "investigating", "affected_services": [app]},
-                         tags("incident")))
+        name = ("Homepage TTR regression across all platforms"
+                if app == "homepage-graphql" else f"{app} degradation")
+        if attribution == "none":      # filed unattributed: no hint either way
+            incs.append(_inc({**base, "event": "incident.created", "ts": at, "name": name,
+                              "status": "investigating", "affected_services": []},
+                             tags("incident")))
+        elif attribution == "correct":  # the lucky correct first guess, never corrected
+            incs.append(_inc({**base, "event": "incident.created", "ts": at, "name": name,
+                              "status": "investigating", "affected_services": [app]},
+                             tags("incident")))
+        else:                           # guess: a wrong early attribution, corrected later
+            guess = herring_deploys[-1].app if herring_deploys else app
+            incs.append(_inc({**base, "event": "incident.created", "ts": at, "name": name,
+                              "status": "investigating", "affected_services": [guess]},
+                             tags("incident")))
+            incs.append(_inc({**base, "event": "incident.updated", "ts": at + CORRECTION_AFTER,
+                              "status": "investigating", "affected_services": [app]},
+                             tags("incident")))
     for d in w.degs_of("edge-gateway", "load_shed"):
         at = d.start_utc + timedelta(minutes=2)
         alerts.append(_alert(9100, at, "edge-gateway", "warning", "edge.requests.shed", "firing",
@@ -315,7 +328,7 @@ def _history(w: World, rng) -> tuple[list[RawRecord], list[RawRecord]]:
 
 
 def render_events(scenario: Scenario, degradations: tuple[Degradation, ...],
-                  rng: np.random.Generator) -> list[RawRecord]:
+                  rng: np.random.Generator, attribution: str = "guess") -> list[RawRecord]:
     w = World(scenario, degradations)
     changes: list[RawRecord] = []
     ab = [_rec("events/ab_allocations.csv", "ab_csv", {"header": True})]
@@ -330,7 +343,7 @@ def render_events(scenario: Scenario, degradations: tuple[Degradation, ...],
         elif c.kind == "experiment_allocation":
             ab.append(_ab(w, c, crng))
     changes += _mitigations(w, rng)
-    alerts, pages, incs = _live(w, rng)
+    alerts, pages, incs = _live(w, rng, attribution)
     alerts += _noise_alerts(w, rng)
     hp, hi = _history(w, rng)
     by_time = sorted(changes + alerts + pages + hp + incs + hi,

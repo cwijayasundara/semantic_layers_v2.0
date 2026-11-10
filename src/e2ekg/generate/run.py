@@ -58,6 +58,7 @@ class GenerationManifest:
     name: str
     seed: int
     scale: float
+    attribution: str
     files: list[str]
     counts: dict[str, int]
     trace_population: dict
@@ -87,7 +88,8 @@ class RenderedScenario:
 
 
 def render_unmessed(scenario: Scenario, scale: float = 1.0,
-                    families: tuple[str, ...] = FAMILIES) -> RenderedScenario:
+                    families: tuple[str, ...] = FAMILIES,
+                    attribution: str = "guess") -> RenderedScenario:
     """Render the scenario's signals before `apply_mess`, with exactly the rng
     stream each renderer gets in `generate_scenario`. `families` limits the work
     to the named renderers (events and chat do not depend on `scale`)."""
@@ -111,7 +113,7 @@ def render_unmessed(scenario: Scenario, scale: float = 1.0,
         recs["traces"] = render_traces(scenario, degs, rng["traces"], scale=scale,
                                        population=pop)
     if "events" in want:
-        recs["events"] = render_events(scenario, degs, rng["events"])
+        recs["events"] = render_events(scenario, degs, rng["events"], attribution=attribution)
     if "chat" in want:
         beats = chat_beats(scenario, rng["chat"])
         recs["chat"] = beat_records(beats)
@@ -131,12 +133,13 @@ def baseline_scenario(scenario: Scenario) -> Scenario:
             update={"fix_change_id": None, "recovered_utc": None})})
 
 
-def _render_recovered(scenario: Scenario, scale: float, cut: datetime
+def _render_recovered(scenario: Scenario, scale: float, cut: datetime,
+                      attribution: str = "guess"
                       ) -> tuple[RenderedScenario, list[RawRecord], list[MessInjection]]:
     """See the module docstring: baseline records up to the cutoff, the fixed
     render's after it, messed consistently with each other."""
     base = baseline_scenario(scenario)
-    b = render_unmessed(base, scale)
+    b = render_unmessed(base, scale, attribution=attribution)
     base_recs = b.all_records()
     b.records = {}
     states: list[dict] = []
@@ -144,7 +147,7 @@ def _render_recovered(scenario: Scenario, scale: float, cut: datetime
     base_paths = {r.rel_path for r in base_messy if _is_pre(r, cut)}
     head, late = _split_base(base_messy, cut)
     del base_messy
-    f = render_unmessed(scenario, scale)
+    f = render_unmessed(scenario, scale, attribution=attribution)
     post = [replace(r, tags=r.tags | {RECOVERY_TAG}) for r in f.all_records()
             if not _is_pre(r, cut)]
     f.records = {}
@@ -249,7 +252,8 @@ def _z(at: datetime | None) -> str | None:
     return at.isoformat().replace("+00:00", "Z") if at else None
 
 
-def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0) -> GenerationManifest:
+def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0,
+                      attribution: str = "guess") -> GenerationManifest:
     out = Path(out)
     _check_empty(out)
     cut = as_of_utc(scenario)
@@ -257,13 +261,14 @@ def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0) -> Gene
     if fix is not None and (cut is None or fix.at_utc <= cut):
         raise ValueError(f"{scenario.name}: the fix {fix.id} must land after the cutoff {cut}")
     if fix is None:
-        rendered = render_unmessed(scenario, scale)
+        rendered = render_unmessed(scenario, scale, attribution=attribution)
         recs = rendered.all_records()
         rendered.records = {}
         messy, injections = apply_mess(recs, rendered.mess_rng, scenario)
         del recs
     else:
-        rendered, messy, injections = _render_recovered(scenario, scale, cut)
+        rendered, messy, injections = _render_recovered(scenario, scale, cut,
+                                                        attribution=attribution)
     pop = rendered.population
     counts = _counts(messy)
     out.mkdir(parents=True, exist_ok=True)
@@ -279,7 +284,8 @@ def generate_scenario(scenario: Scenario, out: Path, scale: float = 1.0) -> Gene
             for t in ev:
                 by_tag.setdefault(t, []).append(rid)
     manifest = GenerationManifest(
-        name=scenario.name, seed=scenario.seed, scale=scale, files=files, counts=counts,
+        name=scenario.name, seed=scenario.seed, scale=scale, attribution=attribution,
+        files=files, counts=counts,
         trace_population=pop.as_dict(),
         injections=[{"injector_id": i.injector_id, "rel_path": i.rel_path, "detail": i.detail}
                     for i in injections])

@@ -18,6 +18,7 @@ from helpers import (
 from e2ekg.generate import render_logs, render_metrics, render_traces
 from e2ekg.generate.mess.traces import head_sampled
 from e2ekg.generate.render_catalog import render_catalog
+from e2ekg.generate.render_events import render_events
 from e2ekg.generate.render_logs import LOG_FORMAT, zipf_probs
 from e2ekg.scenario.hero import hero_scenario
 from e2ekg.scenario.history import TWIN_RESOLVER
@@ -229,6 +230,24 @@ def test_incident_affected_service_corrected_after_40_min(generated_hero):
     assert [r["affected_services"] for r in recs][:2] == [["api-gateway"], ["homepage-graphql"]]
     t0, t1 = (datetime.fromisoformat(r["ts"].replace("Z", "+00:00")) for r in recs[:2])
     assert t1 - t0 == timedelta(minutes=40)
+
+
+def test_incident_attribution_modes(hero):
+    """The attribution knob: guess files a wrong app first, none files none,
+    correct files the true app from the start (the ablation brackets)."""
+    def filed(mode):
+        degs = propagate(hero.fault, hero.edges, hero.window)
+        recs = render_events(hero, degs, np.random.default_rng(0), attribution=mode)
+        created = next(r for r in recs
+                       if "TTR regression" in str(r.fields.get("name", "")))
+        live = [r for r in recs if r.fields.get("id") == created.fields["id"]]
+        return [(r.fields["event"], tuple(r.fields.get("affected_services") or ()))
+                for r in live]
+
+    assert filed("guess")[0] == ("incident.created", ("api-gateway",))
+    assert filed("guess")[1] == ("incident.updated", ("homepage-graphql",))
+    assert filed("none") == [("incident.created", ())]
+    assert filed("correct")[0] == ("incident.created", ("homepage-graphql",))
 
 
 def test_change_events_carry_opaque_external_ids(hero, generated_hero):
