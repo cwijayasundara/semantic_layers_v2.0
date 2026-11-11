@@ -113,8 +113,10 @@ function style(): cytoscape.StylesheetStyle[] {
     "edge.k-refutes": { "line-color": p.warn, "line-style": "dashed", "target-arrow-shape": "tee", "target-arrow-color": p.warn, width: 1.5, opacity: 0.8 },
     "edge.k-opened": { "line-color": p.mut, "target-arrow-shape": "triangle", "target-arrow-color": p.mut },
     "edge.k-onApp, edge.k-caller": { opacity: 0.3 },
-    // swimlane decoration (never interactive)
-    ".decor": { events: "no", "z-index": 0, label: "data(label)", "text-background-opacity": 0 },
+    // swimlane decoration (never interactive); the label mapping is scoped to elements that
+    // carry the field (the :l connector edges don't) or cytoscape warns on every render
+    ".decor": { events: "no", "z-index": 0, "text-background-opacity": 0 },
+    ".decor[label]": { label: "data(label)" },
     ".stripe": { shape: "rectangle", "background-color": p.accent, "background-opacity": 0.05, "border-width": 0, label: "" },
     ".stripe.odd": { "background-opacity": 0.09 },
     ".stripe.nopath": { "background-color": p.mut, "background-opacity": 0.07 },
