@@ -1,8 +1,8 @@
 "use client";
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { After, CaseNode, CasePayload, Scorecard as Score, TrailFinding, hhmm, useApi } from "@/lib/api";
+import { After, CaseEdge, CaseNode, CasePayload, Scorecard as Score, TrailFinding, hhmm, tail, useApi } from "@/lib/api";
 import { Chip, ErrBox, Spin } from "@/components/Bits";
 import type { Layers } from "@/components/case/CaseGraph";
 import { caseT0, ms } from "@/components/case/swimlane";
@@ -43,6 +43,29 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
   const [selected, setSelected] = useState<CaseNode | null>(null);
   const [finding, setFinding] = useState<TrailFinding | null>(null);
   const [onScreen, setOnScreen] = useState<ReadonlySet<string>>(new Set());
+  // the argument graph: pooled (all hypotheses), one hypothesis' own subgraph, and the one-hop
+  // neighborhoods drilled through via case/expand (merged back into the pooled view)
+  const [hypIdx, setHypIdx] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<{ nodes: CaseNode[]; edges: CaseEdge[] } | null>(null);
+  useEffect(() => { setHypIdx(null); setExpanded(null); }, [data]);
+  const onExpand = useCallback((nodes: CaseNode[], edges: CaseEdge[]) => {
+    setExpanded((x) => x ? { nodes: [...x.nodes, ...nodes], edges: [...x.edges, ...edges] } : { nodes, edges });
+  }, []);
+  const hyp = data.hypotheses?.find((h) => h.i === hypIdx) ?? null;
+  const expandedUris = useMemo(() => new Set(expanded?.nodes.map((n) => n.id) ?? []), [expanded]);
+  const view = useMemo(() => {
+    if (hyp) {
+      // the subgraph's roles are prefixed h{i}: so several hypotheses can share a node; strip
+      // them so the case styles apply, and tag the alternatives this hypothesis refutes
+      const refuted = new Map(hyp.refuted.flatMap((r) => r.uris.map((u) => [u, r] as const)));
+      const norm = (n: CaseNode): CaseNode => ({ ...n, roles: n.roles.map((r) => r.replace(/^h\d+:/, "")) });
+      return { ...data, nodes: hyp.nodes.map((n) => { const x = norm(n); if (refuted.has(n.id)) x.roles = [...x.roles, "refuted_as_root"]; return x; }), edges: hyp.edges };
+    }
+    if (!expanded) return data;
+    const ids = new Set(data.nodes.map((n) => n.id));
+    return { ...data, nodes: [...data.nodes, ...expanded.nodes.filter((n) => !ids.has(n.id)).map((n) => ({ ...n, roles: [...n.roles, "expanded"] }))],
+      edges: [...data.edges, ...expanded.edges.filter((e) => !data.edges.some((o) => o.id === e.id))] };
+  }, [data, hyp, expanded]);
   const highlight = useMemo(() => (finding ? new Set([finding.uri, ...finding.cites]) : null), [finding]);
   // the scorecard is of the eval run the report came from; a job's case falls back to the backend default run
   const run = m.source?.startsWith("eval:") ? m.source.slice(5) : null;
@@ -88,6 +111,16 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
         <span>· as-of cut-off {hhmm(m.as_of)}</span>
         <span className="mut">· report: {m.source ?? "latest eval"}{m.arm ? ` (${m.arm} arm)` : ""}</span>
       </div>
+      {data.hypotheses && data.hypotheses.length > 0 && (
+        <div className="row" style={{ gap: 6, marginBottom: 8 }}>
+          <button className="ghost" style={{ padding: "3px 10px", fontWeight: hyp ? 400 : 700, textDecoration: hyp ? "none" : "underline" }} onClick={() => setHypIdx(null)}>pooled argument</button>
+          {data.hypotheses.map((h) => (
+            <button key={h.i} className="ghost" style={{ padding: "3px 10px", fontWeight: hypIdx === h.i ? 700 : 400, textDecoration: hypIdx === h.i ? "underline" : "none" }} onClick={() => setHypIdx(h.i)}>
+              hypothesis #{h.i + 1}{h.root ? ` · ${tail(h.root)}` : ""}{h.confidence != null ? ` · ${h.confidence.toFixed(2)}` : ""}{h.refuted.length > 0 ? ` · refutes ${h.refuted.length}` : ""}
+            </button>
+          ))}
+        </div>
+      )}
       {score.data && <Scorecard score={score.data} scenario={name} />}
       {score.error && <div className="mut" style={{ marginBottom: 10 }}>Scorecard unavailable: {score.error}</div>}
       <Toolbar layout={layout} setLayout={setLayout} layers={layers} setLayers={setLayers} t0={t0} t1={t1}
@@ -95,17 +128,19 @@ function Case({ name, data }: { name: string; data: CasePayload }) {
         tracing={tracing} onTrace={onTrace} hasChain={hops.length > 0} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 360px", gap: 12 }}>
         <div className="card" style={{ padding: 4, height: "72vh", minHeight: 560 }}>
-          <CaseGraph data={data} layout={layout} layers={layers} time={time} trace={traceIdx == null ? null : hops[traceIdx]?.hop ?? null}
+          <CaseGraph data={view} layout={layout} layers={layers} time={time} trace={traceIdx == null ? null : hops[traceIdx]?.hop ?? null}
             highlight={highlight} onSelect={select} onVisible={setOnScreen} />
         </div>
         <div className="card" style={{ height: "72vh", minHeight: 560, overflow: "auto" }}>
-          <SidePanel scenario={name} data={data} node={selected} chatOn={layers.chat} onClear={() => setSelected(null)} onSelect={select} />
+          <SidePanel scenario={name} data={view} node={selected} chatOn={layers.chat} hyp={hyp} expandedUris={expandedUris} onClear={() => setSelected(null)} onSelect={select} onExpand={onExpand} />
         </div>
       </div>
       <div className="legend">
         <span><i style={{ background: "var(--warn)" }} />★ root (agent)</span>
         <span><i style={{ background: "var(--bad)" }} />causal chain</span>
         <span><i style={{ background: "#f39c6b" }} />other evidence</span>
+        <span><i style={{ background: "var(--panel2)", border: "1px dashed var(--warn)", borderRadius: 0, transform: "rotate(45deg)" }} />✗ refuted as root</span>
+        <span><i style={{ background: "var(--panel2)", border: "1px dotted var(--accent)", borderRadius: 2 }} />⊕ expanded one hop</span>
         <span><i style={{ background: "var(--panel2)", border: "1px dashed var(--mut)", borderRadius: 0, transform: "rotate(45deg)" }} />suspect</span>
         <span><i style={{ background: "var(--accent)", borderRadius: 2 }} />service lane (red once degraded)</span>
         <span><i style={{ background: "var(--ok)", borderRadius: 0 }} />raw file</span>

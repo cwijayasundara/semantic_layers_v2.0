@@ -152,3 +152,38 @@ def test_corrupt_meta_skips_chat_note(client, root):
     (root / "evals/r1/meta.json").write_text("{not json")
     r = client.get("/api/scenarios/hero/case")
     assert r.status_code == 200 and r.json()["meta"]["chat_note"] is None
+
+
+def _a_node_uri(client) -> str:
+    case = client.get("/api/scenarios/hero/case").json()
+    return next(n["id"] for n in case["nodes"]
+                if n["id"].startswith("http") and not n["missing"] and n["cat"] != "finding")
+
+
+def test_case_expand_endpoint(client):
+    uri = _a_node_uri(client)
+    out = client.get("/api/scenarios/hero/case/expand", params={"uri": uri})
+    assert out.status_code == 200
+    body = out.json()
+    assert body["uri"] == uri and body["nodes"]
+    assert any(e["source"] == uri or e["target"] == uri for e in body["edges"])
+
+
+def test_case_expand_rejects_non_uri(client):
+    assert client.get("/api/scenarios/hero/case/expand", params={"uri": "not a uri"}).status_code == 404
+
+
+def test_raw_endpoint_reads_raw_ids(client):
+    uri = _a_node_uri(client)
+    recs = client.get("/api/scenarios/hero/lineage", params={"uri": uri}).json()["records"]
+    assert recs, f"no lineage records for {uri}"
+    out = client.get("/api/scenarios/hero/raw", params={"id": recs[0]["raw_id"], "limit": 5})
+    assert out.status_code == 200
+    rows = out.json()["rows"]
+    assert rows and rows[0]["raw_id"] == recs[0]["raw_id"]
+    assert rows[0].get("line") or rows[0].get("error")
+
+
+def test_raw_endpoint_rejects_bogus_id(client):
+    r = client.get("/api/scenarios/hero/raw", params={"id": "not a raw id"})
+    assert r.status_code == 400

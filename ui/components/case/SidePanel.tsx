@@ -1,6 +1,6 @@
 "use client";
-import { CSSProperties, Fragment, ReactNode } from "react";
-import { CaseNode, CasePayload, Lineage, LineageRecord, hhmm, tail, useApi } from "@/lib/api";
+import { CSSProperties, Fragment, ReactNode, useState } from "react";
+import { api, CaseEdge, CaseNode, CasePayload, ExpandPayload, HypothesisGraph, Lineage, LineageRecord, Rows, hhmm, tail, useApi } from "@/lib/api";
 import { Chip, ErrBox, Spin } from "@/components/Bits";
 
 const box: CSSProperties = { border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px", margin: "8px 0", background: "var(--panel2)" };
@@ -92,6 +92,55 @@ function LineageView({ scenario, n }: { scenario: string; n: CaseNode }) {
   );
 }
 
+/** The original raw lines behind one raw id — the agent's raw_evidence tool in id mode. */
+function RawLines({ scenario, id }: { scenario: string; id: string }) {
+  const { data, error, loading } = useApi<Rows>(`/scenarios/${scenario}/raw?id=${encodeURIComponent(id)}&limit=5`);
+  if (error) return <ErrBox msg={error} />;
+  if (loading || !data) return <Spin what="Reading raw lines" />;
+  return (
+    <div style={{ ...box, borderColor: "var(--ok)" }}>
+      {data.rows.length === 0 && <div className="mut" style={{ fontSize: 12 }}>No raw records matched this id.</div>}
+      {data.rows.map((r, i) => (
+        <div key={r.raw_id ?? i} style={{ margin: "6px 0" }}>
+          <div className="mono mut" style={{ fontSize: 10, wordBreak: "break-all" }}>{r.raw_id}{r.ts ? ` · ${hhmm(r.ts)}` : ""}{r.len ? ` · cut (${r.len} bytes)` : ""}</div>
+          {r.line ? <pre style={{ maxHeight: 140 }}>{r.line}</pre> : <div className="warn" style={{ fontSize: 12 }}>{r.error ?? "no raw line"}</div>}
+          {r.truncated != null && <div className="mut" style={{ fontSize: 11 }}>… {r.truncated} more lines not shown</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The evidence the hypothesis cites: URIs select their node; raw ids (not graph nodes) load
+    the original lines. */
+function Arguments({ scenario, hyp, onSelect }: { scenario: string; hyp: HypothesisGraph; onSelect(n: CaseNode): void }) {
+  const [openRaw, setOpenRaw] = useState<string | null>(null);
+  const rawIds = hyp.evidence.filter((e) => !e.startsWith("http"));
+  return (
+    <>
+      <h3 style={{ marginTop: 12 }}>Hypothesis #{hyp.i + 1} arguments</h3>
+      {hyp.confidence != null && <div style={{ marginBottom: 4 }}><Chip tone="acc">confidence {hyp.confidence.toFixed(2)}</Chip></div>}
+      {rawIds.length > 0 && <div className="mut" style={{ fontSize: 12 }}>{rawIds.length} raw-id evidence item{rawIds.length === 1 ? "" : "s"} — not graph nodes; click one to read the original lines.</div>}
+      {rawIds.map((id) => (
+        <div key={id} style={{ margin: "4px 0" }}>
+          <a href="#" className="mono" style={{ fontSize: 11, wordBreak: "break-all" }} onClick={(e) => { e.preventDefault(); setOpenRaw(openRaw === id ? null : id); }}>{openRaw === id ? "▾ " : "▸ "}{id}</a>
+          {openRaw === id && <RawLines key={id} scenario={scenario} id={id} />}
+        </div>
+      ))}
+      {hyp.refuted.length > 0 && (
+        <div style={{ ...box, borderColor: "var(--warn)" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--warn)" }}>✗ {hyp.refuted.length} alternative{hyp.refuted.length === 1 ? "" : "s"} refuted as root</div>
+          {hyp.refuted.map((r, i) => (
+            <div key={i} style={{ margin: "4px 0", fontSize: 12 }}>
+              {r.uris.map(tail).join(", ")} — <span className="mut">{r.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 function Overview({ data, chatOn }: { data: CasePayload; chatOn: boolean }) {
   const m = data.meta;
   return (
@@ -117,11 +166,43 @@ function Overview({ data, chatOn }: { data: CasePayload; chatOn: boolean }) {
   );
 }
 
-export default function SidePanel({ scenario, data, node, chatOn, onClear, onSelect }: {
-  scenario: string; data: CasePayload; node: CaseNode | null; chatOn: boolean; onClear(): void; onSelect(n: CaseNode): void;
+/** Drill-through: one hop of the as-of graph around `n`, merged into the case view. */
+function ExpandButton({ scenario, n, expanded, onExpand }: {
+  scenario: string; n: CaseNode; expanded: boolean; onExpand(nodes: CaseNode[], edges: CaseEdge[]): void;
 }) {
-  if (!node) return <Overview data={data} chatOn={chatOn} />;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const p = await api<ExpandPayload>(`/scenarios/${scenario}/case/expand?uri=${encodeURIComponent(n.id)}`);
+      onExpand(p.nodes, p.edges);
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button className="ghost" onClick={run} disabled={busy} style={{ padding: "3px 10px" }}>
+        {busy ? "expanding…" : expanded ? "⊕ re-expand one hop" : "⊕ expand one hop in the as-of graph"}
+      </button>
+      {expanded && <span className="mut" style={{ fontSize: 11, marginLeft: 8 }}>neighbors drawn on the graph</span>}
+      {err && <ErrBox msg={err} />}
+    </div>
+  );
+}
+
+export default function SidePanel({ scenario, data, node, chatOn, hyp, expandedUris, onClear, onSelect, onExpand }: {
+  scenario: string; data: CasePayload; node: CaseNode | null; chatOn: boolean; hyp: HypothesisGraph | null;
+  expandedUris: ReadonlySet<string>; onClear(): void; onSelect(n: CaseNode): void; onExpand(nodes: CaseNode[], edges: CaseEdge[]): void;
+}) {
+  if (!node) return (
+    <>
+      <Overview data={data} chatOn={chatOn} />
+      {hyp && <Arguments scenario={scenario} hyp={hyp} onSelect={onSelect} />}
+    </>
+  );
   const n = node;
+  const refutations = (data.hypotheses ?? []).flatMap((h) => h.refuted.filter((r) => r.uris.includes(n.id)).map((r) => ({ h: h.i, ...r })));
+  const expandable = n.id.startsWith("http") && !n.missing && n.cat !== "finding";
   const sources = n.cat === "raw" ? data.edges.filter((e) => e.target === n.id).map((e) => data.nodes.find((x) => x.id === e.source)).filter((x): x is CaseNode => !!x) : [];
   return (
     <>
@@ -140,6 +221,13 @@ export default function SidePanel({ scenario, data, node, chatOn, onClear, onSel
       {n.cat === "finding" && !n.missing && <div className="mut" style={{ fontSize: 12 }}>Recorded by the agent during the run (from its trail), so it is not in the as-of store and has no data time; drawn just after the latest item it cites.</div>}
       <Facts n={n} alertApp={data.meta.alert.app} />
       {n.agent_reason && <><h3 style={{ marginTop: 10 }}>Agent&apos;s reasoning</h3><div style={quote}>“{n.agent_reason}”</div></>}
+      {refutations.length > 0 && (
+        <div style={{ ...box, borderColor: "var(--warn)" }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--warn)" }}>✗ refuted by the agent</div>
+          {refutations.map((r, i) => <div key={i} className="mut" style={{ fontSize: 12 }}>hypothesis #{r.h + 1}: {r.reason}</div>)}
+        </div>
+      )}
+      {expandable && onExpand && <ExpandButton scenario={scenario} n={n} expanded={expandedUris.has(n.id)} onExpand={onExpand} />}
       {n.discussed === false && <div style={{ ...box, color: "var(--mut)" }}>not discussed by the agent</div>}
       {n.cat === "chat" && typeof n.props["chat:quote"] === "string" && <div style={{ ...quote, borderLeftColor: "#b48cff" }}>“{n.props["chat:quote"]}”</div>}
 
@@ -163,6 +251,7 @@ export default function SidePanel({ scenario, data, node, chatOn, onClear, onSel
       ) : n.cat !== "app" && n.cat !== "finding" && !n.missing && n.id.startsWith("http") ? (
         <><h3 style={{ marginTop: 12 }}>Lineage: raw → processed → graph</h3><LineageView key={n.id} scenario={scenario} n={n} /></>
       ) : null}
+      {hyp && <Arguments scenario={scenario} hyp={hyp} onSelect={onSelect} />}
     </>
   );
 }

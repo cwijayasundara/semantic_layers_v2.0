@@ -415,6 +415,19 @@ def case_expand(scenario: str, uri: str) -> dict:
         raise HTTPException(404, str(e))
 
 
+@app.get("/api/scenarios/{scenario}/raw")
+def raw_record(scenario: str, id: str, limit: int = 20) -> dict:
+    """The raw lines behind one raw id (the agent's raw_evidence tool in id mode): the
+    drill-through for the evidence the report cites as raw ids. raw_evidence returns a bare
+    row list (truncation noted on the last row), so it is wrapped as {rows} here."""
+    try:
+        rows = _call(scenario, "raw_evidence", uri_or_selector=id.strip(),
+                     limit=max(1, min(int(limit), 100)))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    return {"rows": rows, "count": len(rows)} if isinstance(rows, list) else rows
+
+
 @app.get("/api/scenarios/{scenario}/after")
 def after(scenario: str, source: str = "") -> dict:
     """The run's case, continued past its cut-off: the symptom and chain metrics and the

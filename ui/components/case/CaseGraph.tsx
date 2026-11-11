@@ -60,6 +60,8 @@ function display(n: CaseNode): string {
   else if (n.cat === "other") s = `${n.cat} ${n.label.slice(0, 8)}`;
   else s = `${n.cat} ${t}`;
   if (n.hop != null && !has(n, "root", "best_candidate")) s = `#${n.hop} ${s}`;
+  if (has(n, "refuted_as_root")) s = `✗ ${s}`;
+  else if (has(n, "expanded")) s = `⊕ ${s}`;
   return n.missing ? `${s}\n(not in as-of store)` : s;
 }
 
@@ -95,6 +97,8 @@ function style(): cytoscape.StylesheetStyle[] {
     ".role-symptom": { width: 22, height: 22, "background-color": p.bad, "border-width": 3, "border-color": p.text, "font-weight": "bold" },
     ".role-root": { shape: "star", width: 38, height: 38, "background-color": p.warn, "border-width": 1.5, "border-style": "solid", "border-color": p.text, "font-size": 13, "font-weight": "bold", color: p.warn },
     ".role-best_candidate": { shape: "diamond", width: 26, height: 26, "background-color": p.panel2, "border-width": 2.5, "border-style": "dashed", "border-color": p.warn, color: p.warn, "font-size": 12 },
+    ".role-refuted_as_root": { "border-width": 1.5, "border-style": "dashed", "border-color": p.warn, opacity: 0.75 },
+    ".role-expanded": { "border-width": 1.5, "border-style": "dotted", "border-color": p.accent, "background-color": p.panel2 },
     ".cat-chat": { shape: "round-rectangle", width: 12, height: 12, "background-color": p.chat, color: p.chat, "font-size": 8 },
     ".cat-raw": { shape: "rectangle", width: 11, height: 11, "background-color": p.ok, color: p.ok, "font-size": 8 },
     ".lbl-top": { "text-valign": "top", "text-margin-y": -2 },
@@ -106,6 +110,7 @@ function style(): cytoscape.StylesheetStyle[] {
     "edge.k-prov": { "line-color": p.ok, opacity: 0.2, width: 0.8 },
     "edge.k-mentions": { "line-color": p.chat, opacity: 0.35, width: 0.8 },
     "edge.k-cites": { "line-color": p.accent, "line-style": "dashed" },
+    "edge.k-refutes": { "line-color": p.warn, "line-style": "dashed", "target-arrow-shape": "tee", "target-arrow-color": p.warn, width: 1.5, opacity: 0.8 },
     "edge.k-opened": { "line-color": p.mut, "target-arrow-shape": "triangle", "target-arrow-color": p.mut },
     "edge.k-onApp, edge.k-caller": { opacity: 0.3 },
     // swimlane decoration (never interactive)

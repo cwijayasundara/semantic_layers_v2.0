@@ -52,7 +52,14 @@ export type CaseMeta = {
   /** tool calls that failed or whose answer was cut to fit, while building this case */
   tool_issues?: { tool: string; issue: string }[];
 };
-export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; trail: Trail | null };
+export type Refuted = { uris: string[]; reason: string; as_root: boolean };
+/** one hypothesis' own argument subgraph, roles prefixed `h{i}:` (normalized by the view) */
+export type HypothesisGraph = {
+  i: number; root: string | null; confidence: number | null; chain: string[]; evidence: string[];
+  refuted: Refuted[]; nodes: CaseNode[]; edges: CaseEdge[];
+};
+export type CasePayload = { meta: CaseMeta; nodes: CaseNode[]; edges: CaseEdge[]; hypotheses?: HypothesisGraph[]; trail: Trail | null };
+export type ExpandPayload = { uri: string; nodes: CaseNode[]; edges: CaseEdge[]; truncated: boolean };
 export type TrailStep = { i: number; at: string; tool: string; args: Record<string, unknown>; output: string };
 export type TrailFinding = { uri: string; specialist: string; app: string | null; claim: string | null; confidence: number | null; cites: string[] };
 export type Trail = { steps: TrailStep[]; findings: TrailFinding[] };
