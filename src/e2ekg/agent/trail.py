@@ -43,6 +43,13 @@ class Trail(BaseCallbackHandler):
     def on_tool_error(self, error, *, run_id, **kwargs):
         self._finish(run_id, f"error: {error}")
 
+    def note(self, tool: str, args: dict, output) -> None:
+        """A step the agent loop did not make: a fast-path prefetch, specialist call or
+        escalation (see e2ekg.agent.fastpath)."""
+        with self._lock:
+            self.steps.append({"i": len(self.steps), "at": datetime.now(UTC).isoformat(),
+                               "tool": tool, "args": args, "output": str(output)[:OUTPUT_CHARS]})
+
     def _finish(self, run_id: UUID, output) -> None:
         text = output if isinstance(output, str) else json.dumps(output, default=str)
         with self._lock:

@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from e2ekg.agent.report import RCAReport
 from e2ekg.evals import run as ev
+from e2ekg.evals.arms import DEFAULT_ARMS
 from e2ekg.evals.run import (
     ARMS, RunSpec, execute, make_plan, resolve_arms, resolve_scenarios, run_evals, run_one,
     score_runs,
@@ -70,7 +71,9 @@ def test_run_files_are_written_whole_or_not_at_all(tmp_path):
 
 
 def test_unknown_arms_and_scenarios_are_refused_by_name(eval_root):
-    assert resolve_arms("all") == list(ARMS) and resolve_arms("graph,graph") == ["graph"]
+    assert resolve_arms("all") == list(DEFAULT_ARMS)          # the fast arm is opt-in (A.2)
+    assert "graph_fast" not in resolve_arms("all") and resolve_arms("graph_fast") == ["graph_fast"]
+    assert resolve_arms("graph,graph") == ["graph"]
     with pytest.raises(ValueError, match="no_gate"):
         resolve_arms("graph,no_gate")
     assert resolve_scenarios(eval_root, "all") == ["hero", "v-control"]

@@ -293,9 +293,14 @@ def _add_ontology(sub) -> None:
 
 
 def _cmd_rca(args: argparse.Namespace) -> int:
-    from e2ekg.agent.autorca import run_rca
-    report = run_rca(args.alert, args.scenario, root=Path(args.root),
-                     evidence_root=Path(args.evidence) if args.evidence else None)
+    if args.fast:
+        from e2ekg.agent.fastpath import run_rca_fast
+        report = run_rca_fast(args.alert, args.scenario, root=Path(args.root),
+                              evidence_root=Path(args.evidence) if args.evidence else None)
+    else:
+        from e2ekg.agent.autorca import run_rca
+        report = run_rca(args.alert, args.scenario, root=Path(args.root),
+                         evidence_root=Path(args.evidence) if args.evidence else None)
     print(report.model_dump_json(indent=2))
     return 0 if report.verdict == "root_cause_found" else 1
 
@@ -309,6 +314,9 @@ def _add_rca(sub) -> None:
     p.add_argument("--evidence", default=None,
                    help="directory behind the agent's /evidence/, kept after the run "
                         "(default: a temporary directory per run)")
+    p.add_argument("--fast", action="store_true",
+                   help="the fast path (A.2): prefetch + one-shot specialists + synthesis; "
+                        "escalates to the Deep Path when the synthesis is weak")
     p.set_defaults(func=_cmd_rca)
 
 

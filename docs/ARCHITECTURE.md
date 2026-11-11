@@ -853,6 +853,37 @@ The final answer is bound by a pydantic schema via `ToolStrategy(RCAReport)`
 wrote the report in one shot with no tool calls). Every hypothesis must cite graph
 URIs; the scorer checks that cited evidence reaches answer-key evidence raw ids.
 
+### 8.5 The fast path (`agent/fastpath.py`, the Deep Path's happy-path shortcut)
+
+Same tools, same store, same report schema — but by the time a specialist's tool
+loop ends, everything it learned was computable deterministically in advance. The
+LLM's irreplaceable job is judgment, not fetching (`fastpath.specialist_slice`
+runs each specialist's own tool slice and `candidate_evidence` in chunks, with
+the real tools, before any model is consulted):
+
+```
+  t=0.0s  PREFETCH (deterministic tool calls, ~1s)      no LLM
+  t=1.0s  7 SPECIALISTS IN PARALLEL (one-shot each)     wall = slowest ≈ 4s
+          slice in the prompt -> FindingIns tool call;
+          findings recorded on a private store copy,
+          validated by the same SHACL record_finding
+  t=5.0s  SYNTHESIS (1 call, prompts/autorca_fast.md)   ≈ 12s
+          chains + changes + candidate facts + findings
+          -> RCAReport; weak (conf < 0.6, top-two tie
+          <= 0.05, inconclusive) -> ESCALATE to run_rca
+```
+
+Measured on the hero alert: **43 -> 8 model calls, 410K -> 33K input tokens,
+~32.5 s -> ~17-20 s wall**, correct root, no escalation. The remaining wall is
+two GLM decode phases (~60 tok/s), not structure; the contingencies in
+PROPOSAL-fast-rca-and-evidence-graph.md §A.3 (skip specialists on corroborated
+engine chains, a smaller specialist model, token streaming) are the path below
+10 s. Escalation is proven, not assumed: a weak synthesis hands the alert to the
+Deep Path over a fresh store copy, so no fast-path finding reaches it.
+
+Evals: the `graph_fast` arm is **opt-in** (`e2ekg eval --arms graph_fast`) —
+`all` keeps the Deep Path arms the evals have always measured.
+
 ---
 
 ## 9. Layer 7 — The knowledge flywheel

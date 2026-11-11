@@ -61,7 +61,16 @@ Diagnosis, in order of impact:
 
 *Expected: ~25–30 s. This alone makes the demo feel live. The next phase gets <10 s.*
 
-### A.2 Phase 2 — The Fast Path (<10 s)
+### A.2 Phase 2 — The Fast Path (<10 s) — **implemented, decode-bound at ~17–20 s**
+
+> **Status (measured):** `agent/fastpath.py` + the opt-in `graph_fast` eval arm ship
+> the structure below — 43 → 8 model calls, 410K → 33K input tokens, ~32.5 s →
+> **~17–20 s** on the hero alert (prefetch 1 s, 7 specialists in parallel 4 s,
+> synthesis ~12 s), correct root at confidence 0.9, no escalation, eval top-1.
+> The <10 s estimate assumed ~4 s per decode phase; GLM-5.3-flash decodes at
+> ~60 tok/s even with `reasoning_effort: low`, so the wall is two decode phases,
+> not call structure. The §A.3 contingencies are the path below 10 s. Output
+> caps (≤2 findings per specialist, ≤3-sentence summary) bought 20.4 → 17.1 s.
 
 The insight: **by the time a specialist's tool loop ends, everything it learned was
 computable deterministically in advance.** The LLM's irreplaceable job is judgment,
@@ -93,6 +102,11 @@ not fetching. So:
   silently swap what the evals measure.
 
 ### A.3 Phase 2.5 — If flash isn't fast enough (contingencies)
+
+Status against the measured 17–20 s: the specialist model is already the small
+half of the wall (~4 s); the synthesis decode (~12 s) is the lever that matters
+and none of the levers below shrink it without giving up the judgment — the
+corroboration shortcut (first row) is the only one that removes calls entirely.
 
 | Lever | Effect | Trade-off |
 |---|---|---|

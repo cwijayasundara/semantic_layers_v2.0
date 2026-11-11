@@ -4,6 +4,8 @@
 
 Arms (all scored by the same `score()`):
   graph                   the AutoRCA agent with its evidence tool (`candidate_evidence`)
+  graph_fast              the fast path (A.2): prefetch + one-shot specialists + synthesis;
+                          opt-in (not in `all`), escalates to the Deep Path when weak
   graph_no_evidence_tool  the same agent without that tool
   raw_only                one agent over the as-of raw files, no graph (compare it with
                           graph_no_evidence_tool, not graph)
@@ -35,11 +37,12 @@ from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
 
 from e2ekg.agent.autorca import FailedRCA, run_rca
+from e2ekg.agent.fastpath import run_rca_fast
 from e2ekg.agent.report import Hypothesis, RCAReport
 from e2ekg.agent.tools import make_tools
 from e2ekg.agent.trail import Trail
 from e2ekg.correlate.engine import MIN_CONFIDENCE, correlate
-from e2ekg.evals.arms import ARMS, ENGINE_ARMS, LLM_ARMS
+from e2ekg.evals.arms import ARMS, DEFAULT_ARMS, ENGINE_ARMS, FAST_ARM, LLM_ARMS
 from e2ekg.evals.rawview import ensure_raw_view
 from e2ekg.evals.raw_only import run_raw_only
 from e2ekg.evals.score import evidence_checker, load_answers, score, scenario_change
@@ -68,7 +71,7 @@ class RunSpec:
 
     @property
     def llm(self) -> bool:
-        return self.arm in LLM_ARMS
+        return self.arm in (*LLM_ARMS, FAST_ARM)
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,7 @@ def resolve_scenarios(root: Path, spec: str) -> list[str]:
 
 
 def resolve_arms(spec: str) -> list[str]:
-    arms = ARMS if spec == "all" else tuple(a.strip() for a in spec.split(",") if a.strip())
+    arms = DEFAULT_ARMS if spec == "all" else tuple(a.strip() for a in spec.split(",") if a.strip())
     unknown = [a for a in arms if a not in ARMS]
     if unknown:
         raise ValueError(f"unknown arm {', '.join(unknown)}; choose from {', '.join(ARMS)}")
@@ -121,7 +124,7 @@ def make_plan(scenarios: list[str], runs: int, arms: list[str]) -> list[RunSpec]
     holds whole rounds over the scenarios."""
     plan = [RunSpec(s, a, 0) for s in scenarios for a in arms if a in ENGINE_ARMS]
     plan += [RunSpec(s, a, r) for r in range(runs) for s in scenarios for a in arms
-             if a in LLM_ARMS]
+             if a in (*LLM_ARMS, FAST_ARM)]
     return plan
 
 
@@ -190,12 +193,19 @@ def run_agent(case: Case, arm: str, evals_dir: Path,
         view = Path(evals_dir) / "_raw_asof" / case.scenario
         ensure_raw_view(raw, case.proc, case.as_of, view)
         report = run_raw_only(case.alert_id, view, callbacks=[log], **kw)
+        return {"report": report.model_dump(), **log.tokens(), "model_calls": log.model_calls,
+                "tools": log.tools}
+    trail = Trail()
+    escalated = False
+    if arm == FAST_ARM:
+        report = run_rca_fast(case.alert_id, case.scenario, root=case.root, callbacks=[log],
+                              trail=trail, **kw)
+        escalated = any(s["tool"] == "escalate" for s in trail.steps)
     else:
-        trail = Trail()
         report = run_rca(case.alert_id, case.scenario, root=case.root, callbacks=[log],
                          with_evidence_tool=arm == "graph", trail=trail, **kw)
-    return {"report": report.model_dump(), **log.tokens(), "model_calls": log.model_calls,
-            "tools": log.tools, **({"trail": trail.dump()} if arm != "raw_only" else {})}
+    return {"report": report.model_dump(), "escalated": escalated, **log.tokens(),
+            "model_calls": log.model_calls, "tools": log.tools, "trail": trail.dump()}
 
 
 def run_one(spec: RunSpec, *, root: Path, evals_dir: Path,
